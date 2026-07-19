@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Control de Existencias y Producciones</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          marca: { DEFAULT: '#8B3A5C', light: '#F4E8ED' },
+          verde: '#1D9E75', amarillo: '#EF9F27', rojo: '#E24B4A', rojoFluor: '#FF1744'
+        }
+      }
+    }
+  };
+</script>
+<style>
+  body { -webkit-tap-highlight-color: transparent; }
+  input, select { height:2.25rem; width:100%; border-radius:0.5rem; border:1px solid #d4d4d4; padding:0 0.75rem; font-size:0.875rem; outline:none; }
+  input:focus, select:focus { border-color:#8B3A5C; box-shadow:0 0 0 1px #8B3A5C; }
+</style>
+</head>
+<body class="min-h-screen bg-neutral-50 text-neutral-900">
+
+<!-- ============ CONFIGURA AQUÍ TU PROYECTO SUPABASE ============ -->
+<script>
+  window.SUPABASE_URL = 'https://dzkzamulweovcrotcxdq.supabase.co';
+  window.SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR6a3phbXVsd2VvdmNyb3RjeGRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyMzczNDYsImV4cCI6MjA5OTgxMzM0Nn0.jD31eQzwTkJHYtXodsz0q3wBg9TJK4lxdERI5P8oMYo';
+</script>
+<!-- =============================================================== -->
+
+<div id="pantalla-carga" class="flex min-h-screen items-center justify-center">
+  <p class="text-sm text-neutral-400">Cargando...</p>
+</div>
+
+<div id="app" class="hidden"></div>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+const supabase = createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+const app = document.getElementById('app');
+const pantallaCarga = document.getElementById('pantalla-carga');
+
+let usuarioActual = null; // fila de usuarios_bot
+let pantalla = 'resumen';
+
+const LOGO_CORTO = `
+  <svg width="20" height="22" viewBox="0 0 100 110" aria-hidden="true">
+    <g fill="none" stroke="#8B3A5C" stroke-width="7" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M18 30 L82 30 L50 62 Z"/><line x1="50" y1="62" x2="50" y2="88"/><line x1="33" y1="88" x2="67" y2="88"/>
+      <line x1="63" y1="30" x2="76" y2="17"/>
+    </g>
+    <g transform="translate(80,10)"><circle r="10" fill="none" stroke="#8B3A5C" stroke-width="5"/><circle r="2.6" fill="#8B3A5C"/></g>
+  </svg>`;
+
+const LOGO_COMPLETO = `
+  <svg width="52" height="57" viewBox="0 0 100 110" aria-hidden="true">
+    <g fill="none" stroke="#8B3A5C" stroke-width="7" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M18 30 L82 30 L50 62 Z"/><line x1="50" y1="62" x2="50" y2="88"/><line x1="33" y1="88" x2="67" y2="88"/>
+      <line x1="63" y1="30" x2="76" y2="17"/>
+    </g>
+    <g transform="translate(80,10)"><circle r="10" fill="none" stroke="#8B3A5C" stroke-width="5"/><circle r="2.6" fill="#8B3A5C"/></g>
+  </svg>`;
+
+function obtenerLunesDeLaSemana(fecha) {
+  const d = new Date(fecha);
+  const dia = d.getDay();
+  const diff = d.getDate() - dia + (dia === 0 ? -6 : 1);
+  const lunes = new Date(d);
+  lunes.setDate(diff);
+  return lunes.toISOString().slice(0, 10);
+}
+
+async function validarVentanaDeTurno() {
+  if (!usuarioActual?.requiere_cierre_turno) return { permitido: true };
+
+  const diasSemana = ['DOMINGO', 'LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO'];
+  const hoy = new Date();
+  const diaHoy = diasSemana[hoy.getDay()];
+
+  if ((usuarioActual.dias_libres || []).includes(diaHoy)) {
+    return { permitido: false, razon: `Hoy (${diaHoy.toLowerCase()}) es tu día libre.` };
+  }
+
+  const semanaInicio = obtenerLunesDeLaSemana(hoy);
+  const { data: fila } = await supabase
+    .from('personal_horarios')
+    .select('*')
+    .eq('nombre_persona', usuarioActual.nombre)
+    .eq('semana_inicio', semanaInicio)
+    .eq('dia_semana', diaHoy)
+    .maybeSingle();
+
+  if (!fila || !fila.hora_salida) {
+    return { permitido: false, razon: 'No tienes turno asignado hoy.' };
+  }
+  return { permitido: true, horaSalida: fila.hora_salida };
+}
+
+// ---------------- Utilidades ----------------
+
+function semanaActual() {
+  const hoy = new Date();
+  const dia = hoy.getDay();
+  const diff = hoy.getDate() - dia + (dia === 0 ? -6 : 1);
+  return new Date(hoy.setDate(diff)).toISOString().slice(0, 10);
+}
+
+function estadoStock(cantidad) {
+  if (cantidad < 0) return { clase: 'bg-rojoFluor text-white', valor: cantidad };
+  if (cantidad <= 5) return { clase: 'bg-rojo/10 text-rojo', valor: cantidad };
+  if (cantidad <= 8) return { clase: 'bg-amarillo/10 text-amarillo', valor: cantidad };
+  return { clase: 'bg-verde/10 text-verde', valor: cantidad };
+}
+
+const FORMATO_SYROP = {
+  'syrop piña': '750 CC', 'syrop manzana': '750 CC',
+  'syrop mix berries': '800 CC', 'syrop sandía': '250 CC'
+};
+
+function puedeEscribir(area) {
+  if (!usuarioActual) return false;
+  const permisos = {
+    diario: ['admin', 'bodega'],
+    produccion: ['admin', 'produccion']
+  };
+  const permitidos = permisos[area];
+  return permitidos ? permitidos.includes(usuarioActual.rol) : true;
+}
+
+// ---------------- Render raíz ----------------
+
+async function render() {
+  const { data: { session } } = await supabase.auth.getSession();
+
+  if (!session) {
+    app.innerHTML = vistaLogin();
+    montarLogin();
+  } else {
+    if (!usuarioActual) {
+      const { data } = await supabase.from('usuarios_bot').select('*').eq('auth_user_id', session.user.id).maybeSingle();
+      usuarioActual = data;
+    }
+    if (!usuarioActual) {
+      app.innerHTML = `<div class="p-6 text-center text-sm text-neutral-500">Tu cuenta no está vinculada a ningún perfil. Contacta al administrador.</div>`;
+    } else {
+      const turno = await validarVentanaDeTurno();
+      if (!turno.permitido) {
+        app.innerHTML = vistaBloqueadaPorTurno(turno.razon);
+        montarBloqueoTurno();
+      } else {
+        await renderPantalla();
+      }
+    }
+  }
+
+  pantallaCarga.classList.add('hidden');
+  app.classList.remove('hidden');
+}
+
+function vistaBloqueadaPorTurno(razon) {
+  return `
+  <main class="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+    ${LOGO_CORTO}
+    <p class="text-sm font-medium">Fuera de tu horario de turno</p>
+    <p class="text-xs text-neutral-500">${razon}</p>
+    <button id="btn-logout-bloqueo" class="mt-2 rounded-lg border border-neutral-200 px-4 py-2 text-xs text-neutral-500">Cerrar sesión</button>
+  </main>`;
+}
+
+function montarBloqueoTurno() {
+  document.getElementById('btn-logout-bloqueo').addEventListener('click', async () => {
+    await supabase.auth.signOut();
+    usuarioActual = null;
+    await render();
+  });
+}
+
+// ---------------- Login ----------------
+
+function vistaLogin() {
+  return `
+  <main class="flex min-h-screen items-center justify-center p-4">
+    <div class="w-full max-w-sm rounded-2xl border border-neutral-200 bg-white p-8">
+      <div class="mb-8 flex flex-col items-center gap-1">
+        ${LOGO_COMPLETO}
+        <p class="text-center text-sm font-medium text-marca leading-tight mt-1">Control de Existencias<br/>y Producciones</p>
+        <p class="text-[10px] tracking-wider text-neutral-400">MATEO PERALTA</p>
+      </div>
+      <form id="form-login" class="flex flex-col gap-4">
+        <div>
+          <label class="mb-1 block text-xs text-neutral-500">Nombre de usuario</label>
+          <input id="input-username" type="text" autocomplete="off" required />
+        </div>
+        <div>
+          <label class="mb-1 block text-xs text-neutral-500">Contraseña</label>
+          <input id="input-password" type="password" autocomplete="off" required />
+        </div>
+        <p id="error-login" class="text-xs text-rojo hidden"></p>
+        <button type="submit" class="mt-1 h-10 rounded-lg bg-marca text-sm font-medium text-white active:scale-[0.98]">Iniciar sesión</button>
+      </form>
+      <div class="mt-6 rounded-lg bg-neutral-50 p-3 text-center">
+        <p class="text-xs text-neutral-500">Tu sesión se cierra automáticamente al terminar el turno.</p>
+      </div>
+    </div>
+  </main>`;
+}
+
+function montarLogin() {
+  document.getElementById('form-login').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const username = document.getElementById('input-username').value.trim();
+    const password = document.getElementById('input-password').value;
+    const errorEl = document.getElementById('error-login');
+    errorEl.classList.add('hidden');
+
+    const { data: correo, error: errBusqueda } = await supabase.rpc('obtener_correo_por_username', { p_username: username });
+    if (errBusqueda || !correo) {
+      errorEl.textContent = 'Usuario no encontrado.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({ email: correo, password });
+    if (error) {
+      errorEl.textContent = 'Usuario o contraseña incorrectos.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+    usuarioActual = null;
+    await render();
+  });
+}
+
+// ---------------- Shell (header + nav) ----------------
+
+function shell(titulo, contenidoHtml) {
+  const esAdmin = usuarioActual.rol === 'admin';
+  return `
+    <header class="flex items-center gap-2 border-b border-neutral-200 px-4 py-3">
+      <button id="btn-ir-resumen" aria-label="Ir a Resumen">${LOGO_CORTO}</button>
+      <p class="flex-1 text-sm font-medium text-marca">${titulo}</p>
+      ${esAdmin ? `<button id="btn-config" aria-label="Configuración" class="p-1 text-neutral-500"><i class="ti ti-settings"></i>⚙</button>` : ''}
+      <button id="btn-logout" aria-label="Cerrar sesión" class="p-1 text-xs text-neutral-400">Salir</button>
+    </header>
+    <div id="contenido" class="pb-16">${contenidoHtml}</div>
+    <nav class="fixed inset-x-0 bottom-0 flex border-t border-neutral-200 bg-white">
+      ${navBoton('diario', 'Diario')}
+      ${navBoton('produccion', 'Producción')}
+      ${navBoton('resumen', 'Resumen')}
+      ${navBoton('global', 'Global')}
+    </nav>
+  `;
+}
+
+function navBoton(clave, etiqueta) {
+  const activo = pantalla === clave;
+  return `<button data-nav="${clave}" class="flex flex-1 flex-col items-center gap-1 py-2.5 text-[10px] ${activo ? 'text-marca font-medium' : 'text-neutral-500'}">${etiqueta}</button>`;
+}
+
+function montarShell() {
+  document.getElementById('btn-ir-resumen')?.addEventListener('click', () => cambiarPantalla('resumen'));
+  document.getElementById('btn-logout')?.addEventListener('click', async () => {
+    await supabase.auth.signOut();
+    usuarioActual = null;
+    await render();
+  });
+  document.getElementById('btn-config')?.addEventListener('click', () => cambiarPantalla('configuracion'));
+  document.querySelectorAll('[data-nav]').forEach((btn) => {
+    btn.addEventListener('click', () => cambiarPantalla(btn.dataset.nav));
+  });
+}
+
+async function cambiarPantalla(clave) {
+  pantalla = clave;
+  await renderPantalla();
+}
+
+async function renderPantalla() {
+  if (pantalla === 'diario') await vistaDiario();
+  else if (pantalla === 'produccion') await vistaProduccion();
+  else if (pantalla === 'resumen') await vistaResumen();
+  else if (pantalla === 'global') await vistaGlobal();
+  else if (pantalla === 'configuracion') await vistaConfiguracion();
+}
+
+// ---------------- Diario ----------------
+
+async function vistaDiario() {
+  const { data: movimientos } = await supabase
+    .from('diario_movimientos').select('*').eq('semana_inicio', semanaActual())
+    .order('fecha', { ascending: false }).limit(60);
+
+  const filas = (movimientos || []).map((m) => {
+    const positivo = m.cantidad > 0;
+    return `
+      <div class="flex items-center gap-3 border-b border-neutral-100 px-2 py-2">
+        <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${positivo ? 'bg-verde/10' : 'bg-rojo/10'}">
+          <span style="color:${positivo ? '#1D9E75' : '#E24B4A'}">${positivo ? '↗' : '↘'}</span>
+        </span>
+        <div class="flex-1">
+          <p class="text-sm font-medium">${m.sabor} · ${m.tipo}</p>
+          <p class="text-[10.5px] text-neutral-400">${m.responsable} · ${new Date(m.fecha).toLocaleString('es-CL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>
+        </div>
+        <span class="text-sm font-medium" style="color:${positivo ? '#1D9E75' : '#E24B4A'}">${positivo ? '+' : ''}${m.cantidad} ${m.formato}</span>
+      </div>`;
+  }).join('') || `<p class="px-4 py-6 text-center text-sm text-neutral-400">Aún no hay movimientos esta semana.</p>`;
+
+  const permitido = puedeEscribir('diario');
+
+  app.innerHTML = shell('Diario de movimientos', `
+    ${permitido ? `<div class="flex justify-end px-4 pt-3"><button id="btn-nuevo-diario" class="rounded-full bg-marca px-3 py-1.5 text-xs font-medium text-white">+ Registrar</button></div>` : ''}
+    <div id="lista-diario" class="px-2 py-2">${filas}</div>
+    ${permitido ? formularioDiarioHtml() : ''}
+  `);
+  montarShell();
+  if (permitido) montarFormularioDiario();
+}
+
+function formularioDiarioHtml() {
+  return `
+    <div id="panel-form-diario" class="hidden border-t border-neutral-200 p-4">
+      <div class="flex gap-2 mb-3">
+        <button type="button" id="btn-accion-entrada" class="h-9 flex-1 rounded-lg border border-verde bg-verde/10 text-verde text-xs font-medium">↗ Entrada</button>
+        <button type="button" id="btn-accion-salida" class="h-9 flex-1 rounded-lg border border-neutral-200 text-neutral-500 text-xs font-medium">↘ Salida</button>
+      </div>
+      <form id="form-diario">
+        <input type="hidden" id="campo-accion" value="entrada" />
+        <label class="mb-1 block text-xs text-neutral-500">Sabor</label>
+        <input id="campo-sabor" list="lista-sabores" placeholder="Elige o escribe un sabor" class="mb-2" />
+        <datalist id="lista-sabores">
+          <option>Frambuesa</option><option>Frutilla</option><option>Mango</option><option>Mix berries</option>
+          <option>Hielo</option><option>Syrop piña</option><option>Syrop manzana</option><option>Syrop mix berries</option><option>Syrop sandía</option>
+        </datalist>
+        <div class="flex gap-2 mb-1">
+          <div class="flex-1">
+            <label class="mb-1 block text-xs text-neutral-500">Tipo</label>
+            <input id="campo-tipo" list="lista-tipos" placeholder="Elige o escribe" />
+            <datalist id="lista-tipos"><option>Pulpa</option><option>Fruta</option><option>Cubo</option><option>Frappé</option><option>Bolsa</option></datalist>
+          </div>
+          <div class="flex-1">
+            <label class="mb-1 block text-xs text-neutral-500">Formato</label>
+            <input id="campo-formato" list="lista-formatos" placeholder="Kilo (auto)" />
+            <datalist id="lista-formatos"><option>Kilo</option><option>500 gr</option><option>3 kilo</option><option>Bolsa</option><option>750 CC</option><option>800 CC</option><option>250 CC</option></datalist>
+          </div>
+        </div>
+        <p id="hint-auto" class="hidden text-[10.5px] text-marca mb-2">✨ Formato rellenado automáticamente según el syrop.</p>
+        <label class="mb-1 block text-xs text-neutral-500">Cantidad</label>
+        <input id="campo-cantidad" type="number" step="0.01" class="mb-3" />
+        <p id="error-diario" class="hidden text-xs text-rojo mb-2"></p>
+        <button type="submit" class="h-10 w-full rounded-lg bg-marca text-sm font-medium text-white">Registrar</button>
+      </form>
+    </div>`;
+}
+
+function montarFormularioDiario() {
+  document.getElementById('btn-nuevo-diario').addEventListener('click', () => {
+    document.getElementById('panel-form-diario').classList.toggle('hidden');
+  });
+
+  const btnEntrada = document.getElementById('btn-accion-entrada');
+  const btnSalida = document.getElementById('btn-accion-salida');
+  const campoAccion = document.getElementById('campo-accion');
+  btnEntrada.addEventListener('click', () => {
+    campoAccion.value = 'entrada';
+    btnEntrada.className = 'h-9 flex-1 rounded-lg border border-verde bg-verde/10 text-verde text-xs font-medium';
+    btnSalida.className = 'h-9 flex-1 rounded-lg border border-neutral-200 text-neutral-500 text-xs font-medium';
+  });
+  btnSalida.addEventListener('click', () => {
+    campoAccion.value = 'salida';
+    btnSalida.className = 'h-9 flex-1 rounded-lg border border-rojo bg-rojo/10 text-rojo text-xs font-medium';
+    btnEntrada.className = 'h-9 flex-1 rounded-lg border border-neutral-200 text-neutral-500 text-xs font-medium';
+  });
+
+  function chequearAutoFormato() {
+    const sabor = document.getElementById('campo-sabor').value.trim().toLowerCase();
+    const tipo = document.getElementById('campo-tipo').value.trim().toUpperCase();
+    const hint = document.getElementById('hint-auto');
+    if (tipo === 'BOLSA' && FORMATO_SYROP[sabor]) {
+      document.getElementById('campo-formato').value = FORMATO_SYROP[sabor];
+      hint.classList.remove('hidden');
+    } else {
+      hint.classList.add('hidden');
+    }
+  }
+  document.getElementById('campo-sabor').addEventListener('input', chequearAutoFormato);
+  document.getElementById('campo-tipo').addEventListener('input', chequearAutoFormato);
+
+  document.getElementById('form-diario').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorEl = document.getElementById('error-diario');
+    errorEl.classList.add('hidden');
+
+    const sabor = document.getElementById('campo-sabor').value.trim();
+    const tipo = document.getElementById('campo-tipo').value.trim();
+    const formato = document.getElementById('campo-formato').value.trim();
+    const cantidadRaw = Number(document.getElementById('campo-cantidad').value);
+    const accion = campoAccion.value;
+
+    if (!sabor || !tipo || !formato || !cantidadRaw) {
+      errorEl.textContent = 'Completa sabor, tipo, formato y cantidad.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    const cantidad = accion === 'salida' ? -Math.abs(cantidadRaw) : Math.abs(cantidadRaw);
+    const { error } = await supabase.from('diario_movimientos').insert([{
+      formato, sabor, tipo, cantidad, responsable: usuarioActual.nombre, semana_inicio: semanaActual()
+    }]);
+
+    if (error) {
+      errorEl.textContent = error.message;
+      errorEl.classList.remove('hidden');
+      return;
+    }
+    await vistaDiario();
+  });
+}
+
+// ---------------- Producción ----------------
+
+async function vistaProduccion() {
+  const { data: lotes } = await supabase.from('produccion_mezclas').select('*').order('fecha_ingreso', { ascending: true });
+  const enCamara = (lotes || []).filter((l) => l.ubicacion === 'CAMARA');
+  const enSalon = (lotes || []).filter((l) => l.ubicacion === 'SALON');
+  const permitido = puedeEscribir('produccion');
+
+  function filaLote(l) {
+    const fecha = new Date(l.fecha_ingreso).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
+    const bloques = [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].filter(Boolean).join('/');
+    return `<div class="border-b border-neutral-100 py-2">
+      <p class="text-sm font-medium">${l.sabor} + ${l.complemento} ${l.estado === 'proxima' ? '<span class="ml-1 rounded-full bg-marca-light px-2 py-0.5 text-[10px] text-marca">próxima</span>' : ''}</p>
+      <p class="text-[11px] text-neutral-400">Bloques: ${bloques} · ${fecha}</p>
+    </div>`;
+  }
+
+  app.innerHTML = shell('Producción', `
+    ${permitido ? `
+      <div class="flex justify-end gap-2 px-4 pt-3">
+        <button id="btn-en-uso" class="rounded-full border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600">En uso</button>
+        <button id="btn-nueva-mezcla" class="rounded-full bg-marca px-3 py-1.5 text-xs font-medium text-white">+ Nueva mezcla</button>
+      </div>` : ''}
+    <section class="px-4 pt-4">
+      <p class="mb-2 text-xs font-medium text-neutral-500">❄️ EN CÁMARA (más antiguo primero)</p>
+      ${enCamara.length ? enCamara.map(filaLote).join('') : '<p class="text-xs text-neutral-400">— vacío —</p>'}
+    </section>
+    <section class="px-4 pt-5">
+      <p class="mb-2 text-xs font-medium text-neutral-500">🏠 EN SALÓN (en uso)</p>
+      ${enSalon.length ? enSalon.map(filaLote).join('') : '<p class="text-xs text-neutral-400">— vacío —</p>'}
+    </section>
+    ${permitido ? panelNuevaMezclaHtml() : ''}
+    ${permitido ? panelEnUsoHtml(enCamara) : ''}
+  `);
+  montarShell();
+  if (permitido) {
+    document.getElementById('btn-nueva-mezcla').addEventListener('click', () => document.getElementById('panel-nueva-mezcla').classList.toggle('hidden'));
+    document.getElementById('btn-en-uso').addEventListener('click', () => document.getElementById('panel-en-uso').classList.toggle('hidden'));
+    montarFormularioProduccion();
+    montarPanelEnUso();
+  }
+}
+
+function panelNuevaMezclaHtml() {
+  return `
+    <div id="panel-nueva-mezcla" class="hidden border-t border-neutral-200 p-4 mt-4">
+      <form id="form-produccion" class="flex flex-col gap-3">
+        <div><label class="mb-1 block text-xs text-neutral-500">Pulpa</label><input id="campo-pulpa" list="lista-pulpas" placeholder="ej. Mango" required />
+          <datalist id="lista-pulpas"><option>Mango</option><option>Frutilla</option><option>Maracuyá</option><option>Frambuesa</option></datalist>
+        </div>
+        <div><label class="mb-1 block text-xs text-neutral-500">Fruta</label><input id="campo-fruta" list="lista-frutas" placeholder="ej. Durazno" required />
+          <datalist id="lista-frutas"><option>Durazno</option><option>Manzana roja</option><option>Pepino dulce</option><option>Plátano</option></datalist>
+        </div>
+        <div><label class="mb-1 block text-xs text-neutral-500">Bloques (separados por coma)</label><input id="campo-bloques" type="text" placeholder="ej. 18, 18, 14" required /></div>
+        <div><label class="mb-1 block text-xs text-neutral-500">Responsables de la preparación</label><input id="campo-preparado-por" list="lista-personas" placeholder="ej. Katalina, Daniel" /></div>
+        <div><label class="mb-1 block text-xs text-neutral-500">Encargado del turno</label><input id="campo-encargado" list="lista-personas" placeholder="ej. Mateo" />
+          <datalist id="lista-personas"><option>Mateo</option><option>Bárbara</option><option>Victor</option><option>Nayareth</option></datalist>
+        </div>
+        <p class="text-[10.5px] text-neutral-400">❄️ Entra a CÁMARA con la fecha y hora de hoy, automáticamente.</p>
+        <p id="error-produccion" class="hidden text-xs text-rojo"></p>
+        <button type="submit" class="h-10 rounded-lg bg-marca text-sm font-medium text-white">Registrar</button>
+      </form>
+    </div>`;
+}
+
+function montarFormularioProduccion() {
+  document.getElementById('form-produccion').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorEl = document.getElementById('error-produccion');
+    errorEl.classList.add('hidden');
+
+    const sabor = document.getElementById('campo-pulpa').value.trim();
+    const complemento = document.getElementById('campo-fruta').value.trim();
+    const bloquesRaw = document.getElementById('campo-bloques').value.trim();
+    const preparadoPorRaw = document.getElementById('campo-preparado-por').value.trim();
+    const encargado = document.getElementById('campo-encargado').value.trim() || null;
+
+    if (!sabor || !complemento || !bloquesRaw) {
+      errorEl.textContent = 'Completa Pulpa, Fruta y al menos un bloque.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    const bloques = bloquesRaw.split(',').map((b) => Number(b.trim())).filter((n) => !Number.isNaN(n));
+    const preparadoPor = preparadoPorRaw ? preparadoPorRaw.split(',').map((n) => n.trim()).filter(Boolean) : [usuarioActual.nombre];
+    const [b1 = 0, b2 = 0, b3 = 0, b4 = 0] = bloques;
+
+    const { data: lote, error } = await supabase.from('produccion_mezclas').insert([{
+      ubicacion: 'CAMARA', sabor, complemento,
+      bloques_uni1: b1, bloques_uni2: b2, bloques_uni3: b3, bloques_uni4: b4,
+      preparado_por: preparadoPor, encargado_turno: encargado
+    }]).select().single();
+
+    if (error) { errorEl.textContent = error.message; errorEl.classList.remove('hidden'); return; }
+
+    await supabase.from('produccion_movimientos').insert([{ produccion_id: lote.id, tipo: 'entrada_camara', responsable: usuarioActual.nombre }]);
+    await vistaProduccion();
+  });
+}
+
+function panelEnUsoHtml(enCamara) {
+  const opciones = enCamara.map((l) => `<option value="${l.id}">${l.sabor} + ${l.complemento} — ${new Date(l.fecha_ingreso).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' })}</option>`).join('');
+  return `
+    <div id="panel-en-uso" class="hidden border-t border-neutral-200 p-4 mt-4 flex flex-col gap-5">
+      <div>
+        <p class="mb-2 text-xs font-medium">Pasar a salón ahora</p>
+        <form id="form-traslado" class="flex flex-col gap-2">
+          <select id="select-lote-traslado" required><option value="">Elige un lote de cámara</option>${opciones}</select>
+          <p id="error-traslado" class="hidden text-xs text-rojo"></p>
+          <button type="submit" class="h-9 rounded-lg bg-marca px-4 text-xs font-medium text-white w-fit">Trasladar a salón</button>
+        </form>
+      </div>
+      <div class="h-px bg-neutral-100"></div>
+      <div>
+        <p class="mb-2 text-xs font-medium">Próximo sabor a usar</p>
+        <form id="form-cola" class="flex flex-col gap-2">
+          <select id="select-lote-cola" required><option value="">Poner en cola (por orden de fecha)</option>${opciones}</select>
+          <p class="text-[10.5px] text-neutral-400">Marca cuál sigue después del que está en uso.</p>
+          <p id="error-cola" class="hidden text-xs text-rojo"></p>
+          <button type="submit" class="h-9 rounded-lg bg-marca px-4 text-xs font-medium text-white w-fit">Marcar como próxima</button>
+        </form>
+      </div>
+    </div>`;
+}
+
+function montarPanelEnUso() {
+  document.getElementById('form-traslado').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const loteId = document.getElementById('select-lote-traslado').value;
+    const errorEl = document.getElementById('error-traslado');
+    if (!loteId) return;
+    const { data: lote, error } = await supabase.from('produccion_mezclas').update({ ubicacion: 'SALON' }).eq('id', loteId).select().single();
+    if (error) { errorEl.textContent = error.message; errorEl.classList.remove('hidden'); return; }
+    await supabase.from('produccion_movimientos').insert([{ produccion_id: lote.id, tipo: 'traslado_salon', responsable: usuarioActual.nombre }]);
+    await vistaProduccion();
+  });
+
+  document.getElementById('form-cola').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const loteId = document.getElementById('select-lote-cola').value;
+    const errorEl = document.getElementById('error-cola');
+    if (!loteId) return;
+    const { error } = await supabase.from('produccion_mezclas').update({ estado: 'proxima' }).eq('id', loteId);
+    if (error) { errorEl.textContent = error.message; errorEl.classList.remove('hidden'); return; }
+    await vistaProduccion();
+  });
+}
+
+// ---------------- Resumen ----------------
+
+let vistaResumenActual = 'tarjetas';
+let abiertoResumen = null;
+
+async function vistaResumen() {
+  const { data: movimientos } = await supabase.from('diario_movimientos').select('sabor, tipo, cantidad, responsable').eq('semana_inicio', semanaActual());
+  const filas = movimientos || [];
+  const totalEntradas = filas.filter((f) => f.cantidad > 0).reduce((a, f) => a + f.cantidad, 0);
+  const totalSalidas = filas.filter((f) => f.cantidad < 0).reduce((a, f) => a + Math.abs(f.cantidad), 0);
+
+  const mapa = new Map();
+  filas.forEach((f) => {
+    if (!mapa.has(f.sabor)) mapa.set(f.sabor, { sabor: f.sabor, total: 0, tipos: new Set(), detalle: [] });
+    const e = mapa.get(f.sabor);
+    e.total += f.cantidad;
+    e.tipos.add(f.tipo);
+    e.detalle.push({ tipo: f.tipo, cantidad: f.cantidad });
+  });
+  const porSabor = [...mapa.values()].map((s) => ({ ...s, tipos: [...s.tipos] })).sort((a, b) => a.sabor.localeCompare(b.sabor));
+  const tiposUnicos = [...new Set(filas.map((f) => f.tipo))].sort();
+
+  app.innerHTML = shell('Resumen de la semana', `
+    <div class="grid grid-cols-2 gap-2 px-4 pt-3">
+      <div class="rounded-lg bg-neutral-50 p-2.5"><p class="text-[11px] text-neutral-500">Entradas</p><p class="text-xl font-medium">${totalEntradas}</p></div>
+      <div class="rounded-lg bg-neutral-50 p-2.5"><p class="text-[11px] text-neutral-500">Salidas</p><p class="text-xl font-medium">${totalSalidas}</p></div>
+    </div>
+    <div class="flex justify-end px-4 pt-3">
+      <div class="flex rounded-full bg-neutral-100 p-0.5">
+        <button id="btn-vista-tarjetas" class="flex h-7 w-8 items-center justify-center rounded-full text-xs ${vistaResumenActual === 'tarjetas' ? 'bg-marca text-white' : 'text-neutral-500'}">▦</button>
+        <button id="btn-vista-tabla" class="flex h-7 w-8 items-center justify-center rounded-full text-xs ${vistaResumenActual === 'tabla' ? 'bg-marca text-white' : 'text-neutral-500'}">▤</button>
+      </div>
+    </div>
+    <div id="contenido-resumen"></div>
+  `);
+  montarShell();
+  document.getElementById('btn-vista-tarjetas').addEventListener('click', () => { vistaResumenActual = 'tarjetas'; vistaResumen(); });
+  document.getElementById('btn-vista-tabla').addEventListener('click', () => { vistaResumenActual = 'tabla'; vistaResumen(); });
+
+  const contenedor = document.getElementById('contenido-resumen');
+  if (vistaResumenActual === 'tarjetas') {
+    contenedor.innerHTML = porSabor.length ? porSabor.map((s) => {
+      const est = estadoStock(s.total);
+      const abierto = abiertoResumen === s.sabor;
+      return `
+        <div>
+          <button data-sabor="${s.sabor}" class="btn-toggle-sabor flex w-full items-center gap-3 border-b border-neutral-100 px-2 py-2 text-left">
+            <span class="flex-1"><span class="block text-sm font-medium">${s.sabor}</span><span class="block text-[10.5px] text-neutral-400">${s.tipos.join(' · ')}</span></span>
+            <span class="rounded-full px-2.5 py-0.5 text-xs font-medium ${est.clase}">${s.total}</span>
+          </button>
+          ${abierto ? `<div class="px-2 pb-2">${s.detalle.map((d) => `<div class="flex justify-between py-1 text-xs text-neutral-500"><span>${d.tipo}</span><span>${d.cantidad}</span></div>`).join('')}</div>` : ''}
+        </div>`;
+    }).join('') : `<p class="px-4 py-6 text-center text-sm text-neutral-400">Aún no hay movimientos esta semana.</p>`;
+
+    contenedor.querySelectorAll('.btn-toggle-sabor').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        abiertoResumen = abiertoResumen === btn.dataset.sabor ? null : btn.dataset.sabor;
+        vistaResumen();
+      });
+    });
+  } else {
+    const filasTabla = porSabor.map((s) => {
+      const est = estadoStock(s.total);
+      const celdas = tiposUnicos.map((t) => {
+        const encontrado = filas.find((f) => f.sabor === s.sabor && f.tipo === t);
+        return `<td class="px-2.5 py-1.5 text-center text-neutral-500">${encontrado ? encontrado.cantidad : '—'}</td>`;
+      }).join('');
+      return `<tr class="border-b border-neutral-100"><td class="sticky left-0 z-10 bg-white px-2.5 py-1.5 font-medium">${s.sabor}</td>${celdas}<td class="px-2.5 py-1.5 text-center"><span class="rounded-full px-2.5 py-0.5 font-medium ${est.clase}">${s.total}</span></td></tr>`;
+    }).join('');
+    contenedor.innerHTML = `
+      <div class="overflow-x-auto pb-2">
+        <table class="border-collapse whitespace-nowrap text-xs">
+          <thead><tr>
+            <th class="sticky left-0 z-10 bg-white px-2.5 py-2 text-left font-medium text-neutral-500">Sabor</th>
+            ${tiposUnicos.map((t) => `<th class="px-2.5 py-2 font-medium text-neutral-500">${t}</th>`).join('')}
+            <th class="px-2.5 py-2 font-medium text-neutral-500">Total</th>
+          </tr></thead>
+          <tbody>${filasTabla}</tbody>
+        </table>
+      </div>`;
+  }
+}
+
+// ---------------- Global ----------------
+
+let laminaActual = 'pulpas';
+const LAMINAS = {
+  pulpas: { etiqueta: 'Pulpas y frutas', tipos: ['PULPA', 'FRUTA'] },
+  syrops: { etiqueta: 'Syrops', tipos: ['BOLSA'] },
+  hielo: { etiqueta: 'Hielo', tipos: ['CUBO', 'FRAPPE'] }
+};
+
+async function vistaGlobal() {
+  const { data: stock } = await supabase.from('stock_global').select('*').order('sabor');
+  const items = stock || [];
+
+  app.innerHTML = shell('Stock global', `
+    <div class="flex gap-2 overflow-x-auto px-4 pb-1 pt-3">
+      ${Object.entries(LAMINAS).map(([clave, l]) => `<button data-lamina="${clave}" class="whitespace-nowrap rounded-full px-3 py-1.5 text-xs ${laminaActual === clave ? 'bg-marca text-white' : 'border border-neutral-200 text-neutral-500'}">${l.etiqueta}</button>`).join('')}
+    </div>
+    <div class="flex gap-3 px-4 py-2">
+      <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-verde"></span>9+</span>
+      <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-amarillo"></span>6-8</span>
+      <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-rojo"></span>0-5</span>
+      <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-rojoFluor"></span>neg.</span>
+    </div>
+    <div id="lista-global" class="max-h-[60vh] overflow-y-auto px-2"></div>
+  `);
+  montarShell();
+
+  document.querySelectorAll('[data-lamina]').forEach((btn) => {
+    btn.addEventListener('click', () => { laminaActual = btn.dataset.lamina; vistaGlobal(); });
+  });
+
+  const tiposActivos = LAMINAS[laminaActual].tipos;
+  const filtrados = items.filter((i) => tiposActivos.includes(i.tipo));
+  const cont = document.getElementById('lista-global');
+  cont.innerHTML = filtrados.length ? filtrados.map((item) => {
+    const est = estadoStock(item.total);
+    const colorBarra = item.total < 0 ? '#FF1744' : item.total <= 5 ? '#E24B4A' : item.total <= 8 ? '#EF9F27' : '#1D9E75';
+    return `
+      <div class="flex items-center gap-3 border-b border-neutral-100 px-2 py-2">
+        <span class="h-full w-1 self-stretch rounded" style="background-color:${colorBarra}"></span>
+        <span class="flex-1"><span class="block text-sm font-medium">${item.sabor}</span><span class="block text-[10.5px] text-neutral-400">${item.tipo}</span></span>
+        <span class="rounded-full px-2.5 py-0.5 text-xs font-medium ${est.clase}">${item.total}</span>
+      </div>`;
+  }).join('') : `<p class="px-4 py-6 text-center text-sm text-neutral-400">Sin productos en esta lámina.</p>`;
+}
+
+// ---------------- Configuración ----------------
+
+async function vistaConfiguracion() {
+  if (usuarioActual.rol !== 'admin') { pantalla = 'resumen'; return vistaResumen(); }
+
+  app.innerHTML = shell('Configuración', `
+    <div class="flex flex-col gap-6 p-4">
+      <div>
+        <p class="mb-3 text-sm font-medium">Apariencia</p>
+        <div class="flex items-center justify-between border-b border-neutral-100 py-2">
+          <span class="text-sm text-neutral-600">Modo oscuro</span>
+          <span class="text-xs text-neutral-400">próximamente</span>
+        </div>
+      </div>
+      <div>
+        <p class="mb-1 text-sm font-medium">Rangos de alerta de stock</p>
+        <p class="mb-3 text-[11px] text-neutral-400">Verde: 9+ · Amarillo: 6-8 · Rojo: 0-5 · Rojo flúor: negativos.</p>
+        <p class="text-[11px] text-neutral-400">La edición de estos rangos está disponible en la versión Next.js del proyecto.</p>
+      </div>
+    </div>
+  `);
+  montarShell();
+}
+
+// ---------------- Arranque ----------------
+
+supabase.auth.onAuthStateChange(() => render());
+render();
+</script>
+</body>
+</html>
