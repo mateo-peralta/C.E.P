@@ -1044,21 +1044,21 @@ async function vistaGlobal() {
 }
 
 function colorPdfPorCantidad(total) {
-  if (total < 0) return { bg: '#FF1744', color: '#ffffff' };
-  if (total <= 5) return { bg: '#FCE7E6', color: '#B3261E' };
-  if (total <= 8) return { bg: '#FDF1DC', color: '#946200' };
-  return { bg: '#E3F5EE', color: '#0F7A57' };
+  if (total < 0) return { bg: '#FF1744', color: '#ffffff', bgFila: '#FFE1E8' };
+  if (total <= 5) return { bg: '#E24B4A', color: '#ffffff', bgFila: '#FCE7E6' };
+  if (total <= 8) return { bg: '#EF9F27', color: '#ffffff', bgFila: '#FDF1DC' };
+  return { bg: '#1D9E75', color: '#ffffff', bgFila: '#E3F5EE' };
 }
 
 function descargarPdfExistencias(items) {
   const fecha = new Date().toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' });
   const filasHtml = items.map((i) => {
     const c = colorPdfPorCantidad(i.total);
-    return `<tr>
-      <td>${i.sabor}</td>
+    return `<tr style="background:${c.bgFila}">
+      <td style="border-left:5px solid ${c.bg};font-weight:600">${i.sabor}</td>
       <td>${i.tipo}</td>
       <td style="text-align:right">
-        <span style="display:inline-block;min-width:36px;padding:2px 8px;border-radius:12px;background:${c.bg};color:${c.color};font-weight:600;">${i.total}</span>
+        <span style="display:inline-block;min-width:36px;padding:2px 10px;border-radius:12px;background:${c.bg};color:${c.color};font-weight:700;">${i.total}</span>
       </td>
     </tr>`;
   }).join('');
@@ -1071,10 +1071,12 @@ function descargarPdfExistencias(items) {
       h1{color:#8B3A5C;font-size:18px;margin-bottom:2px}
       p{color:#888;font-size:12px;margin-top:0}
       table{width:100%;border-collapse:collapse;margin-top:16px}
-      th,td{padding:6px 8px;border-bottom:1px solid #eee;font-size:12px;text-align:left}
-      th{color:#888;font-weight:500}
+      th,td{padding:8px 10px;font-size:12.5px;text-align:left}
+      th{color:#888;font-weight:500;border-bottom:2px solid #ddd}
+      tr:not(:last-child) td{border-bottom:2px solid #fff}
       .leyenda{display:flex;gap:14px;margin-top:14px;font-size:11px;color:#555}
       .punto{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:middle}
+      @media print { body{padding:12px} }
     </style></head>
     <body>
       <h1>Control de Existencias y Producciones</h1>
