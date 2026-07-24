@@ -1043,9 +1043,26 @@ async function vistaGlobal() {
   }).join('') : `<p class="px-4 py-6 text-center text-sm text-neutral-400">Sin productos en esta lámina.</p>`;
 }
 
+function colorPdfPorCantidad(total) {
+  if (total < 0) return { bg: '#FF1744', color: '#ffffff' };
+  if (total <= 5) return { bg: '#FCE7E6', color: '#B3261E' };
+  if (total <= 8) return { bg: '#FDF1DC', color: '#946200' };
+  return { bg: '#E3F5EE', color: '#0F7A57' };
+}
+
 function descargarPdfExistencias(items) {
   const fecha = new Date().toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' });
-  const filasHtml = items.map((i) => `<tr><td>${i.sabor}</td><td>${i.tipo}</td><td style="text-align:right">${i.total}</td></tr>`).join('');
+  const filasHtml = items.map((i) => {
+    const c = colorPdfPorCantidad(i.total);
+    return `<tr>
+      <td>${i.sabor}</td>
+      <td>${i.tipo}</td>
+      <td style="text-align:right">
+        <span style="display:inline-block;min-width:36px;padding:2px 8px;border-radius:12px;background:${c.bg};color:${c.color};font-weight:600;">${i.total}</span>
+      </td>
+    </tr>`;
+  }).join('');
+
   const ventana = window.open('', '_blank');
   ventana.document.write(`
     <html><head><title>Existencias — ${fecha}</title>
@@ -1056,10 +1073,18 @@ function descargarPdfExistencias(items) {
       table{width:100%;border-collapse:collapse;margin-top:16px}
       th,td{padding:6px 8px;border-bottom:1px solid #eee;font-size:12px;text-align:left}
       th{color:#888;font-weight:500}
+      .leyenda{display:flex;gap:14px;margin-top:14px;font-size:11px;color:#555}
+      .punto{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:middle}
     </style></head>
     <body>
       <h1>Control de Existencias y Producciones</h1>
       <p>Existencias globales — generado el ${fecha} por ${usuarioActual.nombre}</p>
+      <div class="leyenda">
+        <span><span class="punto" style="background:#1D9E75"></span>9 o más</span>
+        <span><span class="punto" style="background:#EF9F27"></span>6 a 8</span>
+        <span><span class="punto" style="background:#E24B4A"></span>0 a 5</span>
+        <span><span class="punto" style="background:#FF1744"></span>Negativo</span>
+      </div>
       <table><thead><tr><th>Sabor</th><th>Tipo</th><th style="text-align:right">Cantidad</th></tr></thead>
       <tbody>${filasHtml}</tbody></table>
     </body></html>
