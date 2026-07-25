@@ -430,12 +430,12 @@ async function vistaDiario() {
   const permitido = puedeEscribir('diario');
 
   app.innerHTML = shell('Diario de movimientos', `
-    ${permitido ? `<div class="flex justify-end gap-2 px-4 pt-3">
+    ${permitido ? `<div class="flex justify-end px-4 pt-3">
       <button id="btn-cargar-excel" class="rounded-full border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600">📥 Cargar Excel</button>
       <input id="input-excel" type="file" accept=".xlsx,.xls" class="hidden" />
-      <button id="btn-nuevo-diario" class="rounded-full bg-marca px-3 py-1.5 text-xs font-medium text-white">+ Registrar</button>
     </div>
-    <p id="estado-carga-excel" class="hidden px-4 pt-2 text-xs"></p>` : ''}
+    <p id="estado-carga-excel" class="hidden px-4 pt-2 text-xs"></p>
+    ${formularioDiarioHtml()}` : ''}
 
     <div class="flex flex-col gap-2 px-4 pt-3">
       <div class="flex gap-2 overflow-x-auto">
@@ -452,8 +452,8 @@ async function vistaDiario() {
       </div>
     </div>
 
+    <p class="px-4 pt-3 text-xs font-medium text-neutral-500">Movimientos de la semana</p>
     <div id="lista-diario" class="px-2 py-2">${filas}</div>
-    ${permitido ? formularioDiarioHtml() : ''}
   `);
   montarShell();
 
@@ -468,7 +468,8 @@ async function vistaDiario() {
 
 function formularioDiarioHtml() {
   return `
-    <div id="panel-form-diario" class="hidden border-t border-neutral-200 p-4">
+    <div id="panel-form-diario" class="border-t border-b border-neutral-200 p-4">
+      <p class="mb-3 text-xs font-medium text-neutral-500">Registrar movimiento</p>
       <div class="flex gap-2 mb-3">
         <button type="button" id="btn-accion-entrada" class="h-9 flex-1 rounded-lg border border-verde bg-verde/10 text-verde text-xs font-medium">↗ Entrada</button>
         <button type="button" id="btn-accion-salida" class="h-9 flex-1 rounded-lg border border-neutral-200 text-neutral-500 text-xs font-medium">↘ Salida</button>
@@ -497,6 +498,7 @@ function formularioDiarioHtml() {
         <label class="mb-1 block text-xs text-neutral-500">Cantidad</label>
         <input id="campo-cantidad" type="number" step="0.01" class="mb-3" />
         <p id="error-diario" class="hidden text-xs text-rojo mb-2"></p>
+        <p id="msg-ingresado" class="hidden text-center text-sm font-medium text-verde mb-2">✅ INGRESADO</p>
         <button type="submit" class="h-10 w-full rounded-lg bg-marca text-sm font-medium text-white">Registrar</button>
       </form>
     </div>`;
@@ -506,9 +508,6 @@ function montarFormularioDiario() {
   document.getElementById('btn-cargar-excel').addEventListener('click', () => document.getElementById('input-excel').click());
   document.getElementById('input-excel').addEventListener('change', (e) => {
     if (e.target.files[0]) manejarArchivoExcel(e.target.files[0]);
-  });
-  document.getElementById('btn-nuevo-diario').addEventListener('click', () => {
-    document.getElementById('panel-form-diario').classList.toggle('hidden');
   });
 
   const btnEntrada = document.getElementById('btn-accion-entrada');
@@ -542,7 +541,9 @@ function montarFormularioDiario() {
   document.getElementById('form-diario').addEventListener('submit', async (e) => {
     e.preventDefault();
     const errorEl = document.getElementById('error-diario');
+    const msgEl = document.getElementById('msg-ingresado');
     errorEl.classList.add('hidden');
+    msgEl.classList.add('hidden');
 
     const sabor = document.getElementById('campo-sabor').value.trim();
     const tipo = document.getElementById('campo-tipo').value.trim();
@@ -566,8 +567,53 @@ function montarFormularioDiario() {
       errorEl.classList.remove('hidden');
       return;
     }
-    await vistaDiario();
+
+    // No recargamos toda la pantalla — solo limpiamos el formulario, mostramos el aviso,
+    // y refrescamos la lista de movimientos debajo, para poder seguir ingresando rápido.
+    document.getElementById('campo-sabor').value = '';
+    document.getElementById('campo-tipo').value = '';
+    document.getElementById('campo-formato').value = '';
+    document.getElementById('campo-cantidad').value = '';
+    document.getElementById('hint-auto').classList.add('hidden');
+    msgEl.classList.remove('hidden');
+    setTimeout(() => msgEl.classList.add('hidden'), 1500);
+    document.getElementById('campo-sabor').focus();
+
+    await refrescarListaDiario();
   });
+}
+
+/** Vuelve a pedir los movimientos y actualiza solo la lista, sin tocar el formulario ni la posición del scroll. */
+async function refrescarListaDiario() {
+  const { data: movimientos } = await supabase
+    .from('diario_movimientos').select('*').eq('semana_inicio', semanaActual())
+    .order('fecha', { ascending: false }).limit(200);
+
+  const filtrados = (movimientos || []).filter((m) => {
+    if (filtroTipoDiario && m.tipo !== filtroTipoDiario) return false;
+    if (filtroAccionDiario === 'entrada' && m.cantidad <= 0) return false;
+    if (filtroAccionDiario === 'salida' && m.cantidad >= 0) return false;
+    if (filtroResponsableDiario && !m.responsable.toLowerCase().includes(filtroResponsableDiario.toLowerCase())) return false;
+    return true;
+  });
+
+  const filas = filtrados.map((m) => {
+    const positivo = m.cantidad > 0;
+    return `
+      <div class="flex items-center gap-3 border-b border-neutral-100 px-2 py-2">
+        <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${positivo ? 'bg-verde/10' : 'bg-rojo/10'}">
+          <span style="color:${positivo ? '#1D9E75' : '#E24B4A'}">${positivo ? '↗' : '↘'}</span>
+        </span>
+        <div class="flex-1">
+          <p class="text-sm font-medium">${m.sabor} · ${m.tipo}</p>
+          <p class="text-[10.5px] text-neutral-400">${m.responsable} · ${new Date(m.fecha).toLocaleString('es-CL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>
+        </div>
+        <span class="text-sm font-medium" style="color:${positivo ? '#1D9E75' : '#E24B4A'}">${positivo ? '+' : ''}${m.cantidad} ${m.formato}</span>
+      </div>`;
+  }).join('') || `<p class="px-4 py-6 text-center text-sm text-neutral-400">No hay movimientos con estos filtros.</p>`;
+
+  const contenedor = document.getElementById('lista-diario');
+  if (contenedor) contenedor.innerHTML = filas;
 }
 
 // ---------------- Carga de Excel semanal (reemplaza stock actual) ----------------
@@ -698,9 +744,12 @@ async function vistaProduccion() {
   function filaLote(l) {
     const fecha = new Date(l.fecha_ingreso).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
     const bloques = [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].filter(Boolean).join('/');
-    return `<div class="border-b border-neutral-100 py-2">
-      <p class="text-sm font-medium">${l.sabor} + ${l.complemento} ${l.estado === 'proxima' ? '<span class="ml-1 rounded-full bg-marca-light px-2 py-0.5 text-[10px] text-marca">próxima</span>' : ''}</p>
-      <p class="text-[11px] text-neutral-400">Bloques: ${bloques} · ${fecha}</p>
+    return `<div class="flex items-center justify-between border-b border-neutral-100 py-2">
+      <div>
+        <p class="text-sm font-medium">${l.sabor} + ${l.complemento} ${l.estado === 'proxima' ? '<span class="ml-1 rounded-full bg-marca-light px-2 py-0.5 text-[10px] text-marca">próxima</span>' : ''}</p>
+        <p class="text-[11px] text-neutral-400">Bloques: ${bloques} · ${fecha}</p>
+      </div>
+      ${permitido ? `<button data-editar-fecha-lote="${l.id}" data-fecha-actual="${l.fecha_ingreso}" class="btn-editar-fecha p-1 text-neutral-400" aria-label="Editar fecha">📅</button>` : ''}
     </div>`;
   }
 
@@ -727,7 +776,47 @@ async function vistaProduccion() {
     document.getElementById('btn-en-uso').addEventListener('click', () => document.getElementById('panel-en-uso').classList.toggle('hidden'));
     montarFormularioProduccion();
     montarPanelEnUso();
+
+    document.querySelectorAll('.btn-editar-fecha').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const loteId = btn.dataset.editarFechaLote;
+        const fechaActual = btn.dataset.fechaActual;
+        abrirSelectorFecha(fechaActual, async (nuevaFecha) => {
+          if (!nuevaFecha) return;
+          const { error } = await supabase.from('produccion_mezclas').update({ fecha_ingreso: nuevaFecha }).eq('id', loteId);
+          if (error) return alert('No se pudo actualizar la fecha: ' + error.message);
+          await vistaProduccion();
+        });
+      });
+    });
   }
+}
+
+/** Muestra un pequeño selector de fecha flotante junto al botón que se tocó, y llama a onConfirmar con el valor elegido. */
+function abrirSelectorFecha(valorActual, onConfirmar) {
+  const existente = document.getElementById('mini-selector-fecha');
+  if (existente) existente.remove();
+
+  const contenedor = document.createElement('div');
+  contenedor.id = 'mini-selector-fecha';
+  contenedor.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4';
+  contenedor.innerHTML = `
+    <div class="w-full max-w-xs rounded-xl bg-white p-4">
+      <p class="mb-2 text-sm font-medium">Fecha real de esta producción</p>
+      <input id="input-nueva-fecha" type="date" value="${valorActual}" class="mb-3" />
+      <div class="flex gap-2">
+        <button id="btn-cancelar-fecha" class="h-9 flex-1 rounded-lg border border-neutral-200 text-xs text-neutral-500">Cancelar</button>
+        <button id="btn-confirmar-fecha" class="h-9 flex-1 rounded-lg bg-marca text-xs font-medium text-white">Guardar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(contenedor);
+
+  document.getElementById('btn-cancelar-fecha').addEventListener('click', () => contenedor.remove());
+  document.getElementById('btn-confirmar-fecha').addEventListener('click', () => {
+    const valor = document.getElementById('input-nueva-fecha').value;
+    contenedor.remove();
+    onConfirmar(valor);
+  });
 }
 
 function panelNuevaMezclaHtml() {
@@ -969,12 +1058,24 @@ let filtroTipoGlobal = '';
 const LAMINAS = {
   pulpas: { etiqueta: 'Pulpas y frutas', tipos: ['PULPA', 'FRUTA'] },
   syrops: { etiqueta: 'Syrops', tipos: ['BOLSA'] },
-  hielo: { etiqueta: 'Hielo', tipos: ['CUBO', 'FRAPPE'] }
+  hielo: { etiqueta: 'Hielo', tipos: ['CUBO', 'FRAPPE'] },
+  produccion: { etiqueta: 'Producción', tipos: [] } // se maneja aparte, no viene de stock_global
 };
 
 async function vistaGlobal() {
   const { data: stock } = await supabase.from('stock_global').select('*').order('sabor');
   const items = stock || [];
+
+  const { data: lotes } = await supabase.from('produccion_mezclas').select('*').order('fecha_ingreso', { ascending: true });
+  const lotesProduccion = lotes || [];
+
+  const { data: precios } = await supabase.from('precios_sabores').select('*');
+  const mapaPrecios = new Map((precios || []).map((p) => [p.sabor.trim().toUpperCase(), p.precio]));
+  const valorTotal = items.reduce((acc, i) => {
+    const precio = mapaPrecios.get(i.sabor.trim().toUpperCase());
+    return precio ? acc + precio * i.total : acc;
+  }, 0);
+  const formatoCLP = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(n);
 
   const semana = semanaActual();
   const { data: certificacion } = await supabase
@@ -984,6 +1085,12 @@ async function vistaGlobal() {
   const puedeCertificar = usuarioActual.rol === 'admin' || usuarioActual.rol === 'bodega' || usuarioActual.rol === 'produccion';
 
   app.innerHTML = shell('Stock global', `
+    <div class="mx-4 mt-3 rounded-lg bg-marca-light p-3">
+      <p class="text-[11px] text-marca">Valor total de existencias</p>
+      <p class="text-lg font-semibold text-marca">${formatoCLP(valorTotal)}</p>
+      ${mapaPrecios.size === 0 ? `<p class="text-[10px] text-neutral-500 mt-1">Aún no hay precios cargados — agrégalos en Configuración.</p>` : ''}
+    </div>
+
     <div class="flex justify-between gap-2 px-4 pt-3">
       <div class="flex gap-2 overflow-x-auto">
         ${Object.entries(LAMINAS).map(([clave, l]) => `<button data-lamina="${clave}" class="whitespace-nowrap rounded-full px-3 py-1.5 text-xs ${laminaActual === clave ? 'bg-marca text-white' : 'border border-neutral-200 text-neutral-500'}">${l.etiqueta}</button>`).join('')}
@@ -991,12 +1098,13 @@ async function vistaGlobal() {
       <button id="btn-descargar-pdf" class="whitespace-nowrap rounded-full border border-neutral-200 px-3 py-1.5 text-xs text-neutral-600">⬇ PDF</button>
     </div>
 
+    ${laminaActual !== 'produccion' ? `
     <div class="flex gap-2 overflow-x-auto px-4 pt-2">
       <select id="select-filtro-tipo-global" class="w-40">
         <option value="">Todos los tipos</option>
         ${tiposDisponibles.map((t) => `<option value="${t}" ${filtroTipoGlobal === t ? 'selected' : ''}>${t}</option>`).join('')}
       </select>
-    </div>
+    </div>` : ''}
 
     <div class="flex gap-3 px-4 py-2">
       <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-verde"></span>9+</span>
@@ -1021,16 +1129,40 @@ async function vistaGlobal() {
   document.querySelectorAll('[data-lamina]').forEach((btn) => {
     btn.addEventListener('click', () => { laminaActual = btn.dataset.lamina; vistaGlobal(); });
   });
-  document.getElementById('select-filtro-tipo-global').addEventListener('change', (e) => { filtroTipoGlobal = e.target.value; vistaGlobal(); });
+  document.getElementById('select-filtro-tipo-global')?.addEventListener('change', (e) => { filtroTipoGlobal = e.target.value; vistaGlobal(); });
   document.getElementById('btn-descargar-pdf').addEventListener('click', () => descargarPdfExistencias(items));
   document.getElementById('btn-certificar')?.addEventListener('click', async () => {
     const { error } = await supabase.from('certificaciones_semanales').insert([{ semana_inicio: semana, certificado_por: usuarioActual.nombre }]);
-    if (!error) await vistaGlobal();
+    if (!error) {
+      descargarPdfExistencias(items);
+      await vistaGlobal();
+    }
   });
+
+  const cont = document.getElementById('lista-global');
+
+  if (laminaActual === 'produccion') {
+    cont.innerHTML = lotesProduccion.length ? lotesProduccion.map((l) => {
+      const totalBloques = [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].reduce((a, b) => a + (b || 0), 0);
+      const est = estadoStock(totalBloques);
+      const colorBarra = totalBloques < 0 ? '#FF1744' : totalBloques <= 5 ? '#E24B4A' : totalBloques <= 8 ? '#EF9F27' : '#1D9E75';
+      const fecha = new Date(l.fecha_ingreso).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
+      return `
+        <div class="flex items-center gap-3 border-b border-neutral-100 px-2 py-2">
+          <span class="h-full w-1 self-stretch rounded" style="background-color:${colorBarra}"></span>
+          <span class="flex-1">
+            <span class="block text-sm font-medium">${l.sabor} + ${l.complemento}</span>
+            <span class="block text-[10.5px] text-neutral-400">${l.ubicacion === 'CAMARA' ? '❄️ Cámara' : '🏠 Salón'} · ${fecha}</span>
+          </span>
+          <span class="rounded-full px-2.5 py-0.5 text-xs font-medium ${est.clase}">${totalBloques}</span>
+        </div>`;
+    }).join('') : `<p class="px-4 py-6 text-center text-sm text-neutral-400">No hay producción registrada.</p>`;
+    return;
+  }
 
   const tiposActivos = LAMINAS[laminaActual].tipos;
   const filtrados = items.filter((i) => tiposActivos.includes(i.tipo) && (!filtroTipoGlobal || i.tipo === filtroTipoGlobal));
-  const cont = document.getElementById('lista-global');
+  const puedeEditar = puedeEscribir('diario');
   cont.innerHTML = filtrados.length ? filtrados.map((item) => {
     const est = estadoStock(item.total);
     const colorBarra = item.total < 0 ? '#FF1744' : item.total <= 5 ? '#E24B4A' : item.total <= 8 ? '#EF9F27' : '#1D9E75';
@@ -1039,27 +1171,49 @@ async function vistaGlobal() {
         <span class="h-full w-1 self-stretch rounded" style="background-color:${colorBarra}"></span>
         <span class="flex-1"><span class="block text-sm font-medium">${item.sabor}</span><span class="block text-[10.5px] text-neutral-400">${item.tipo}</span></span>
         <span class="rounded-full px-2.5 py-0.5 text-xs font-medium ${est.clase}">${item.total}</span>
+        ${puedeEditar ? `<button data-editar-sabor="${item.sabor}" data-editar-tipo="${item.tipo}" data-editar-actual="${item.total}" class="btn-editar-existencia p-1 text-neutral-400" aria-label="Editar existencia">✏️</button>` : ''}
       </div>`;
   }).join('') : `<p class="px-4 py-6 text-center text-sm text-neutral-400">Sin productos en esta lámina.</p>`;
+
+  document.querySelectorAll('.btn-editar-existencia').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const sabor = btn.dataset.editarSabor;
+      const tipo = btn.dataset.editarTipo;
+      const actual = Number(btn.dataset.editarActual);
+      const nuevoTexto = window.prompt(`Cantidad real de ${sabor} (${tipo}):`, actual);
+      if (nuevoTexto === null) return;
+      const nuevo = Number(nuevoTexto);
+      if (Number.isNaN(nuevo)) return alert('Escribe solo un número.');
+      const delta = nuevo - actual;
+      if (delta === 0) return;
+
+      const { error } = await supabase.from('diario_movimientos').insert([{
+        formato: formatoParaTipoSabor(sabor, tipo),
+        sabor, tipo, cantidad: delta,
+        responsable: `${usuarioActual.nombre} (ajuste manual)`,
+        semana_inicio: semanaActual()
+      }]);
+      if (error) return alert('No se pudo ajustar: ' + error.message);
+      await vistaGlobal();
+    });
+  });
 }
 
 function colorPdfPorCantidad(total) {
-  if (total < 0) return { bg: '#FF1744', color: '#ffffff', bgFila: '#FFE1E8' };
-  if (total <= 5) return { bg: '#E24B4A', color: '#ffffff', bgFila: '#FCE7E6' };
-  if (total <= 8) return { bg: '#EF9F27', color: '#ffffff', bgFila: '#FDF1DC' };
-  return { bg: '#1D9E75', color: '#ffffff', bgFila: '#E3F5EE' };
+  if (total < 0) return { bg: '#FF1744', color: '#ffffff' };
+  if (total <= 5) return { bg: '#E24B4A', color: '#ffffff' };
+  if (total <= 8) return { bg: '#EF9F27', color: '#ffffff' };
+  return { bg: '#1D9E75', color: '#ffffff' };
 }
 
 function descargarPdfExistencias(items) {
   const fecha = new Date().toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' });
   const filasHtml = items.map((i) => {
     const c = colorPdfPorCantidad(i.total);
-    return `<tr style="background:${c.bgFila}">
-      <td style="border-left:5px solid ${c.bg};font-weight:600">${i.sabor}</td>
-      <td>${i.tipo}</td>
-      <td style="text-align:right">
-        <span style="display:inline-block;min-width:36px;padding:2px 10px;border-radius:12px;background:${c.bg};color:${c.color};font-weight:700;">${i.total}</span>
-      </td>
+    return `<tr style="background:${c.bg};color:${c.color}">
+      <td style="font-weight:700">${i.sabor}</td>
+      <td style="font-weight:500">${i.tipo}</td>
+      <td style="text-align:right;font-weight:700;font-size:14px">${i.total}</td>
     </tr>`;
   }).join('');
 
@@ -1070,10 +1224,10 @@ function descargarPdfExistencias(items) {
       body{font-family:Arial,sans-serif;padding:24px;color:#222}
       h1{color:#8B3A5C;font-size:18px;margin-bottom:2px}
       p{color:#888;font-size:12px;margin-top:0}
-      table{width:100%;border-collapse:collapse;margin-top:16px}
-      th,td{padding:8px 10px;font-size:12.5px;text-align:left}
+      table{width:100%;border-collapse:separate;border-spacing:0 4px;margin-top:16px}
+      th,td{padding:9px 12px;font-size:12.5px;text-align:left}
       th{color:#888;font-weight:500;border-bottom:2px solid #ddd}
-      tr:not(:last-child) td{border-bottom:2px solid #fff}
+      tr{border-bottom:4px solid #fff}
       .leyenda{display:flex;gap:14px;margin-top:14px;font-size:11px;color:#555}
       .punto{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:middle}
       @media print { body{padding:12px} }
@@ -1087,7 +1241,7 @@ function descargarPdfExistencias(items) {
         <span><span class="punto" style="background:#E24B4A"></span>0 a 5</span>
         <span><span class="punto" style="background:#FF1744"></span>Negativo</span>
       </div>
-      <table><thead><tr><th>Sabor</th><th>Tipo</th><th style="text-align:right">Cantidad</th></tr></thead>
+      <table><thead><tr style="background:none"><th>Sabor</th><th>Tipo</th><th style="text-align:right">Cantidad</th></tr></thead>
       <tbody>${filasHtml}</tbody></table>
     </body></html>
   `);
@@ -1109,6 +1263,15 @@ async function vistaConfiguracion() {
     { valor: 'muy-grande', etiqueta: 'Muy grande' }
   ];
 
+  let saboresConPrecio = [];
+  if (esAdmin) {
+    const { data: stock } = await supabase.from('stock_global').select('sabor').order('sabor');
+    const { data: precios } = await supabase.from('precios_sabores').select('*');
+    const mapaPrecios = new Map((precios || []).map((p) => [p.sabor.trim().toUpperCase(), p.precio]));
+    const saboresUnicos = [...new Set((stock || []).map((s) => s.sabor))];
+    saboresConPrecio = saboresUnicos.map((s) => ({ sabor: s, precio: mapaPrecios.get(s.trim().toUpperCase()) || '' }));
+  }
+
   app.innerHTML = shell('Configuración', `
     <div class="flex flex-col gap-6 p-4">
       <div>
@@ -1129,6 +1292,20 @@ async function vistaConfiguracion() {
         <p class="mb-1 text-sm font-medium">Rangos de alerta de stock</p>
         <p class="mb-3 text-[11px] text-neutral-400">Verde: 9+ · Amarillo: 6-8 · Rojo: 0-5 · Rojo flúor: negativos.</p>
         <p class="text-[11px] text-neutral-400">La edición de estos rangos está disponible en la versión Next.js del proyecto.</p>
+      </div>
+
+      <div>
+        <p class="mb-1 text-sm font-medium">Precios por sabor</p>
+        <p class="mb-3 text-[11px] text-neutral-400">Se usan para calcular el valor total de existencias en Global.</p>
+        <form id="form-precios" class="flex flex-col gap-2">
+          ${saboresConPrecio.map((s) => `
+            <div class="flex items-center gap-2">
+              <span class="flex-1 text-xs">${s.sabor}</span>
+              <input type="number" name="precio-${s.sabor}" value="${s.precio}" placeholder="$" class="w-28" />
+            </div>`).join('')}
+          <p id="msg-precios" class="hidden text-xs text-verde mt-1">Precios guardados.</p>
+          <button type="submit" class="mt-2 h-9 rounded-lg bg-marca text-xs font-medium text-white">Guardar precios</button>
+        </form>
       </div>` : ''}
     </div>
   `);
@@ -1143,6 +1320,24 @@ async function vistaConfiguracion() {
       aplicarTamanoLetra(btn.dataset.tamano);
       vistaConfiguracion();
     });
+  });
+
+  document.getElementById('form-precios')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const filas = [];
+    for (const [nombreCampo, valor] of formData.entries()) {
+      if (!nombreCampo.startsWith('precio-') || valor === '') continue;
+      const sabor = nombreCampo.replace('precio-', '');
+      filas.push({ sabor: sabor.toUpperCase(), precio: Number(valor), actualizado_por: usuarioActual.nombre, updated_at: new Date().toISOString() });
+    }
+    if (filas.length === 0) return;
+    const { error } = await supabase.from('precios_sabores').upsert(filas, { onConflict: 'sabor' });
+    const msgEl = document.getElementById('msg-precios');
+    if (!error) {
+      msgEl.classList.remove('hidden');
+      setTimeout(() => msgEl.classList.add('hidden'), 2500);
+    }
   });
 }
 
