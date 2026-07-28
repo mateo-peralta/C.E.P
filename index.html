@@ -6,6 +6,7 @@
 <title>Control de Existencias y Producciones</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script>
   tailwind.config = {
     theme: {
@@ -166,6 +167,11 @@ function estadoStock(cantidad) {
   if (cantidad <= 5) return { clase: 'bg-rojo/10 text-rojo', valor: cantidad };
   if (cantidad <= 8) return { clase: 'bg-amarillo/10 text-amarillo', valor: cantidad };
   return { clase: 'bg-verde/10 text-verde', valor: cantidad };
+}
+
+/** Normaliza mayúsculas/espacios antes de guardar, para que "Frambuesa" y "FRAMBUESA" sean siempre el mismo registro. */
+function normalizarTexto(texto) {
+  return (texto || '').trim().toUpperCase();
 }
 
 const FORMATO_SYROP = {
@@ -545,9 +551,9 @@ function montarFormularioDiario() {
     errorEl.classList.add('hidden');
     msgEl.classList.add('hidden');
 
-    const sabor = document.getElementById('campo-sabor').value.trim();
-    const tipo = document.getElementById('campo-tipo').value.trim();
-    const formato = document.getElementById('campo-formato').value.trim();
+    const sabor = normalizarTexto(document.getElementById('campo-sabor').value);
+    const tipo = normalizarTexto(document.getElementById('campo-tipo').value);
+    const formato = normalizarTexto(document.getElementById('campo-formato').value);
     const cantidadRaw = Number(document.getElementById('campo-cantidad').value);
     const accion = campoAccion.value;
 
@@ -1055,6 +1061,7 @@ async function compartirResumenTexto(porSabor, totalEntradas, totalSalidas) {
 
 let laminaActual = 'pulpas';
 let filtroTipoGlobal = '';
+let filtroExportar = 'todo'; // 'todo' | 'pulpas' | 'syrops' | 'hielo'
 const LAMINAS = {
   pulpas: { etiqueta: 'Pulpas y frutas', tipos: ['PULPA', 'FRUTA'] },
   syrops: { etiqueta: 'Syrops', tipos: ['BOLSA'] },
@@ -1084,18 +1091,42 @@ async function vistaGlobal() {
   const tiposDisponibles = [...new Set(items.map((i) => i.tipo))].sort();
   const puedeCertificar = usuarioActual.rol === 'admin' || usuarioActual.rol === 'bodega' || usuarioActual.rol === 'produccion';
 
+  const puedeVerValorTotal = usuarioActual.rol === 'admin' || usuarioActual.rol === 'jefe';
+
+  const badgeCertificacion = certificacion
+    ? `<div class="mx-4 mt-3 flex items-center gap-2 rounded-lg bg-verde/10 px-3 py-2">
+         <span class="text-verde">✅</span>
+         <p class="text-xs text-verde">Certificado por <b>${certificacion.certificado_por}</b> el ${new Date(certificacion.certificado_en).toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' })}</p>
+       </div>`
+    : '';
+
   app.innerHTML = shell('Stock global', `
+    ${badgeCertificacion}
+    ${puedeVerValorTotal ? `
     <div class="mx-4 mt-3 rounded-lg bg-marca-light p-3">
       <p class="text-[11px] text-marca">Valor total de existencias</p>
       <p class="text-lg font-semibold text-marca">${formatoCLP(valorTotal)}</p>
       ${mapaPrecios.size === 0 ? `<p class="text-[10px] text-neutral-500 mt-1">Aún no hay precios cargados — agrégalos en Configuración.</p>` : ''}
+    </div>` : ''}
+
+    <div class="flex gap-2 overflow-x-auto px-4 pt-3">
+      ${Object.entries(LAMINAS).map(([clave, l]) => `<button data-lamina="${clave}" class="whitespace-nowrap rounded-full px-3 py-1.5 text-xs ${laminaActual === clave ? 'bg-marca text-white' : 'border border-neutral-200 text-neutral-500'}">${l.etiqueta}</button>`).join('')}
     </div>
 
-    <div class="flex justify-between gap-2 px-4 pt-3">
-      <div class="flex gap-2 overflow-x-auto">
-        ${Object.entries(LAMINAS).map(([clave, l]) => `<button data-lamina="${clave}" class="whitespace-nowrap rounded-full px-3 py-1.5 text-xs ${laminaActual === clave ? 'bg-marca text-white' : 'border border-neutral-200 text-neutral-500'}">${l.etiqueta}</button>`).join('')}
+    <div class="mx-4 mt-3 rounded-lg bg-neutral-50 p-3">
+      <p class="mb-2 text-xs font-medium text-neutral-600">Exportar reporte</p>
+      <div class="flex gap-2 overflow-x-auto mb-3">
+        ${[
+          { clave: 'todo', etiqueta: 'Todo' },
+          { clave: 'pulpas', etiqueta: 'Pulpas y frutas' },
+          { clave: 'syrops', etiqueta: 'Syrops' },
+          { clave: 'hielo', etiqueta: 'Hielo' }
+        ].map((f) => `<button data-filtro-exportar="${f.clave}" class="whitespace-nowrap rounded-full px-3 py-1 text-[11px] ${filtroExportar === f.clave ? 'bg-marca text-white' : 'border border-neutral-200 text-neutral-500'}">${f.etiqueta}</button>`).join('')}
       </div>
-      <button id="btn-descargar-pdf" class="whitespace-nowrap rounded-full border border-neutral-200 px-3 py-1.5 text-xs text-neutral-600">⬇ PDF</button>
+      <div class="flex gap-2">
+        <button id="btn-descargar-pdf" class="flex-1 h-9 rounded-lg border border-neutral-300 text-xs font-medium text-neutral-600">⬇ PDF</button>
+        <button id="btn-descargar-captura" class="flex-1 h-9 rounded-lg border border-neutral-300 text-xs font-medium text-neutral-600">📷 Captura</button>
+      </div>
     </div>
 
     ${laminaActual !== 'produccion' ? `
@@ -1117,7 +1148,7 @@ async function vistaGlobal() {
 
     <div class="border-t border-neutral-200 p-4 mt-3">
       ${certificacion
-        ? `<p class="text-xs text-verde">✅ Certificado por ${certificacion.certificado_por} el ${new Date(certificacion.certificado_en).toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' })}.</p>`
+        ? `<p class="text-xs text-neutral-400">Para corregir movimientos de esta semana, primero debes descertificarla (Configuración).</p>`
         : puedeCertificar
           ? `<button id="btn-certificar" class="h-9 w-full rounded-lg bg-marca text-xs font-medium text-white">Certificar existencias de esta semana</button>`
           : `<p class="text-xs text-neutral-400">Esta semana aún no ha sido certificada.</p>`
@@ -1130,7 +1161,11 @@ async function vistaGlobal() {
     btn.addEventListener('click', () => { laminaActual = btn.dataset.lamina; vistaGlobal(); });
   });
   document.getElementById('select-filtro-tipo-global')?.addEventListener('change', (e) => { filtroTipoGlobal = e.target.value; vistaGlobal(); });
-  document.getElementById('btn-descargar-pdf').addEventListener('click', () => descargarPdfExistencias(items));
+  document.getElementById('btn-descargar-pdf').addEventListener('click', () => descargarPdfExistencias(itemsParaExportar(items)));
+  document.getElementById('btn-descargar-captura').addEventListener('click', () => capturarPantallaExistencias(itemsParaExportar(items)));
+  document.querySelectorAll('[data-filtro-exportar]').forEach((btn) => {
+    btn.addEventListener('click', () => { filtroExportar = btn.dataset.filtroExportar; vistaGlobal(); });
+  });
   document.getElementById('btn-certificar')?.addEventListener('click', async () => {
     const { error } = await supabase.from('certificaciones_semanales').insert([{ semana_inicio: semana, certificado_por: usuarioActual.nombre }]);
     if (!error) {
@@ -1199,15 +1234,15 @@ async function vistaGlobal() {
   });
 }
 
-function colorPdfPorCantidad(total) {
-  if (total < 0) return { bg: '#FF1744', color: '#ffffff' };
-  if (total <= 5) return { bg: '#E24B4A', color: '#ffffff' };
-  if (total <= 8) return { bg: '#EF9F27', color: '#ffffff' };
-  return { bg: '#1D9E75', color: '#ffffff' };
+/** Filtra los items según lo elegido en "Exportar reporte" (Todo / Pulpas y frutas / Syrops / Hielo). */
+function itemsParaExportar(items) {
+  if (filtroExportar === 'todo') return items;
+  const tipos = LAMINAS[filtroExportar]?.tipos || [];
+  return items.filter((i) => tipos.includes(i.tipo));
 }
 
-function descargarPdfExistencias(items) {
-  const fecha = new Date().toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' });
+/** Arma el HTML del reporte (reutilizado tanto por el PDF como por la captura de pantalla). */
+function construirHtmlReporte(items, fecha, certificadoPor) {
   const filasHtml = items.map((i) => {
     const c = colorPdfPorCantidad(i.total);
     return `<tr style="background:${c.bg};color:${c.color}">
@@ -1217,33 +1252,66 @@ function descargarPdfExistencias(items) {
     </tr>`;
   }).join('');
 
+  return `
+    <h1 style="color:#8B3A5C;font-size:18px;margin-bottom:2px">Control de Existencias y Producciones</h1>
+    <p style="color:#888;font-size:12px;margin-top:0">Existencias globales — generado el ${fecha} por ${usuarioActual.nombre}</p>
+    ${certificadoPor ? `<p style="color:#1D9E75;font-weight:600;font-size:12px">✅ Certificado por ${certificadoPor}</p>` : ''}
+    <div style="display:flex;gap:14px;margin-top:14px;font-size:11px;color:#555">
+      <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#1D9E75"></span>9 o más</span>
+      <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#EF9F27"></span>6 a 8</span>
+      <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#E24B4A"></span>0 a 5</span>
+      <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#FF1744"></span>Negativo</span>
+    </div>
+    <table style="width:100%;border-collapse:separate;border-spacing:0 4px;margin-top:16px">
+      <thead><tr style="background:none">
+        <th style="padding:9px 12px;font-size:12.5px;text-align:left;color:#888;font-weight:500;border-bottom:2px solid #ddd">Sabor</th>
+        <th style="padding:9px 12px;font-size:12.5px;text-align:left;color:#888;font-weight:500;border-bottom:2px solid #ddd">Tipo</th>
+        <th style="padding:9px 12px;font-size:12.5px;text-align:right;color:#888;font-weight:500;border-bottom:2px solid #ddd">Cantidad</th>
+      </tr></thead>
+      <tbody>${filasHtml}</tbody>
+    </table>`;
+}
+
+/** Genera una imagen PNG (captura de pantalla) del reporte, usando html2canvas sobre un contenedor oculto. */
+async function capturarPantallaExistencias(items, certificadoPor = null) {
+  const fecha = new Date().toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' });
+
+  const contenedor = document.createElement('div');
+  contenedor.style.cssText = 'position:fixed;left:-9999px;top:0;width:520px;background:#fff;padding:24px;font-family:Arial,sans-serif;color:#222';
+  contenedor.innerHTML = construirHtmlReporte(items, fecha, certificadoPor);
+  document.body.appendChild(contenedor);
+
+  try {
+    const canvas = await html2canvas(contenedor, { backgroundColor: '#ffffff', scale: 2 });
+    const enlace = document.createElement('a');
+    enlace.download = `existencias_${fecha.replace(/ /g, '_')}.png`;
+    enlace.href = canvas.toDataURL('image/png');
+    enlace.click();
+  } catch (err) {
+    alert('No se pudo generar la captura: ' + err.message);
+  } finally {
+    contenedor.remove();
+  }
+}
+
+function colorPdfPorCantidad(total) {
+  if (total < 0) return { bg: '#FF1744', color: '#ffffff' };
+  if (total <= 5) return { bg: '#E24B4A', color: '#ffffff' };
+  if (total <= 8) return { bg: '#EF9F27', color: '#ffffff' };
+  return { bg: '#1D9E75', color: '#ffffff' };
+}
+
+function descargarPdfExistencias(items, certificadoPor = null) {
+  const fecha = new Date().toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' });
+
   const ventana = window.open('', '_blank');
   ventana.document.write(`
     <html><head><title>Existencias — ${fecha}</title>
     <style>
       body{font-family:Arial,sans-serif;padding:24px;color:#222}
-      h1{color:#8B3A5C;font-size:18px;margin-bottom:2px}
-      p{color:#888;font-size:12px;margin-top:0}
-      table{width:100%;border-collapse:separate;border-spacing:0 4px;margin-top:16px}
-      th,td{padding:9px 12px;font-size:12.5px;text-align:left}
-      th{color:#888;font-weight:500;border-bottom:2px solid #ddd}
-      tr{border-bottom:4px solid #fff}
-      .leyenda{display:flex;gap:14px;margin-top:14px;font-size:11px;color:#555}
-      .punto{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:middle}
       @media print { body{padding:12px} }
     </style></head>
-    <body>
-      <h1>Control de Existencias y Producciones</h1>
-      <p>Existencias globales — generado el ${fecha} por ${usuarioActual.nombre}</p>
-      <div class="leyenda">
-        <span><span class="punto" style="background:#1D9E75"></span>9 o más</span>
-        <span><span class="punto" style="background:#EF9F27"></span>6 a 8</span>
-        <span><span class="punto" style="background:#E24B4A"></span>0 a 5</span>
-        <span><span class="punto" style="background:#FF1744"></span>Negativo</span>
-      </div>
-      <table><thead><tr style="background:none"><th>Sabor</th><th>Tipo</th><th style="text-align:right">Cantidad</th></tr></thead>
-      <tbody>${filasHtml}</tbody></table>
-    </body></html>
+    <body>${construirHtmlReporte(items, fecha, certificadoPor)}</body></html>
   `);
   ventana.document.close();
   ventana.focus();
@@ -1264,12 +1332,16 @@ async function vistaConfiguracion() {
   ];
 
   let saboresConPrecio = [];
+  let certificacionActual = null;
   if (esAdmin) {
     const { data: stock } = await supabase.from('stock_global').select('sabor').order('sabor');
     const { data: precios } = await supabase.from('precios_sabores').select('*');
     const mapaPrecios = new Map((precios || []).map((p) => [p.sabor.trim().toUpperCase(), p.precio]));
     const saboresUnicos = [...new Set((stock || []).map((s) => s.sabor))];
     saboresConPrecio = saboresUnicos.map((s) => ({ sabor: s, precio: mapaPrecios.get(s.trim().toUpperCase()) || '' }));
+
+    const { data: cert } = await supabase.from('certificaciones_semanales').select('*').eq('semana_inicio', semanaActual()).maybeSingle();
+    certificacionActual = cert;
   }
 
   app.innerHTML = shell('Configuración', `
@@ -1288,6 +1360,16 @@ async function vistaConfiguracion() {
       </div>
 
       ${esAdmin ? `
+      <div>
+        <p class="mb-1 text-sm font-medium">Certificación de esta semana</p>
+        ${certificacionActual
+          ? `<p class="mb-2 text-xs text-neutral-600">✅ Certificada por <b>${certificacionActual.certificado_por}</b> el ${new Date(certificacionActual.certificado_en).toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' })}.</p>
+             <button id="btn-descertificar" class="h-9 rounded-lg border border-rojo text-rojo px-4 text-xs font-medium">Descertificar semana actual</button>
+             <p class="mt-2 text-[10.5px] text-neutral-400">Al descertificar, se vuelve a permitir editar/borrar los movimientos de esta semana.</p>`
+          : `<p class="text-xs text-neutral-400">Esta semana aún no está certificada.</p>`
+        }
+      </div>
+
       <div>
         <p class="mb-1 text-sm font-medium">Rangos de alerta de stock</p>
         <p class="mb-3 text-[11px] text-neutral-400">Verde: 9+ · Amarillo: 6-8 · Rojo: 0-5 · Rojo flúor: negativos.</p>
@@ -1338,6 +1420,14 @@ async function vistaConfiguracion() {
       msgEl.classList.remove('hidden');
       setTimeout(() => msgEl.classList.add('hidden'), 2500);
     }
+  });
+
+  document.getElementById('btn-descertificar')?.addEventListener('click', async () => {
+    const confirmar = window.confirm('¿Descertificar la semana actual? Esto vuelve a permitir editar o borrar sus movimientos.');
+    if (!confirmar) return;
+    const { error } = await supabase.from('certificaciones_semanales').delete().eq('semana_inicio', semanaActual());
+    if (error) return alert('No se pudo descertificar: ' + error.message);
+    await vistaConfiguracion();
   });
 }
 
