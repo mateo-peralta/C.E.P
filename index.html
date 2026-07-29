@@ -360,7 +360,7 @@ function shell(titulo, contenidoHtml) {
       ${navBoton('diario', 'Diario')}
       ${navBoton('produccion', 'Producción')}
       ${navBoton('resumen', 'Resumen')}
-      ${navBoton('global', 'Global')}
+      ${navBoton('global', 'Reporte')}
     </nav>
   `;
 }
@@ -1075,7 +1075,10 @@ async function vistaResumen() {
       <div class="rounded-lg bg-neutral-50 p-2.5"><p class="text-[11px] text-neutral-500">Salidas</p><p class="text-xl font-medium">${totalSalidas}</p></div>
     </div>
     <div class="flex justify-between items-center px-4 pt-3">
-      <button id="btn-compartir-resumen" class="rounded-full bg-marca px-3 py-1.5 text-xs font-medium text-white">📤 Compartir resumen</button>
+      <div class="flex gap-2">
+        <button id="btn-compartir-resumen" class="rounded-full bg-marca px-3 py-1.5 text-xs font-medium text-white">📤 Compartir resumen</button>
+        <button id="btn-actualizar-resumen" class="rounded-full border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600" aria-label="Actualizar">🔄</button>
+      </div>
       <div class="flex rounded-full bg-neutral-100 p-0.5">
         <button id="btn-vista-tarjetas" class="flex h-7 w-8 items-center justify-center rounded-full text-xs ${vistaResumenActual === 'tarjetas' ? 'bg-marca text-white' : 'text-neutral-500'}">▦</button>
         <button id="btn-vista-tabla" class="flex h-7 w-8 items-center justify-center rounded-full text-xs ${vistaResumenActual === 'tabla' ? 'bg-marca text-white' : 'text-neutral-500'}">▤</button>
@@ -1088,6 +1091,7 @@ async function vistaResumen() {
   document.getElementById('btn-vista-tarjetas').addEventListener('click', () => { vistaResumenActual = 'tarjetas'; vistaResumen(); });
   document.getElementById('btn-vista-tabla').addEventListener('click', () => { vistaResumenActual = 'tabla'; vistaResumen(); });
   document.getElementById('btn-compartir-resumen').addEventListener('click', () => compartirResumenTexto(porSabor, totalEntradas, totalSalidas));
+  document.getElementById('btn-actualizar-resumen').addEventListener('click', () => vistaResumen());
 
   const contenedor = document.getElementById('contenido-resumen');
   if (vistaResumenActual === 'tarjetas') {
@@ -1217,7 +1221,7 @@ async function vistaGlobal() {
        </div>`
     : '';
 
-  app.innerHTML = shell('Stock global', `
+  app.innerHTML = shell('Reporte', `
     ${badgeCertificacion}
     ${puedeVerValorTotal ? `
     <div class="mx-4 mt-3 rounded-lg bg-marca-light p-3">
@@ -1369,24 +1373,37 @@ function construirHtmlReporte(items, fecha, certificadoPor) {
     </tr>`;
   }).join('');
 
+  // Marca de agua repetida en diagonal, de fondo, en todo el documento.
+  const marcaDeAgua = `
+    <div style="position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0;">
+      <div style="position:absolute;inset:-50%;display:flex;flex-wrap:wrap;gap:60px;transform:rotate(-30deg);opacity:0.07;">
+        ${Array.from({ length: 40 }).map(() => `<span style="font-size:20px;font-weight:700;color:#8B3A5C;white-space:nowrap;">MATEO PERALTA</span>`).join('')}
+      </div>
+    </div>`;
+
   return `
-    <h1 style="color:#8B3A5C;font-size:18px;margin-bottom:2px">Control de Existencias y Producciones</h1>
-    <p style="color:#888;font-size:12px;margin-top:0">Existencias globales — generado el ${fecha} por ${usuarioActual.nombre}</p>
-    ${certificadoPor ? `<p style="color:#1D9E75;font-weight:600;font-size:12px">✅ Certificado por ${certificadoPor}</p>` : ''}
-    <div style="display:flex;gap:14px;margin-top:14px;font-size:11px;color:#555">
-      <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#1D9E75"></span>9 o más</span>
-      <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#EF9F27"></span>6 a 8</span>
-      <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#E24B4A"></span>0 a 5</span>
-      <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#FF1744"></span>Negativo</span>
-    </div>
-    <table style="width:100%;border-collapse:separate;border-spacing:0 4px;margin-top:16px">
-      <thead><tr style="background:none">
-        <th style="padding:9px 12px;font-size:12.5px;text-align:left;color:#888;font-weight:500;border-bottom:2px solid #ddd">Sabor</th>
-        <th style="padding:9px 12px;font-size:12.5px;text-align:left;color:#888;font-weight:500;border-bottom:2px solid #ddd">Tipo</th>
-        <th style="padding:9px 12px;font-size:12.5px;text-align:right;color:#888;font-weight:500;border-bottom:2px solid #ddd">Cantidad</th>
-      </tr></thead>
-      <tbody>${filasHtml}</tbody>
-    </table>`;
+    <div style="position:relative;">
+      ${marcaDeAgua}
+      <div style="position:relative;z-index:1;">
+        <h1 style="color:#8B3A5C;font-size:18px;margin-bottom:2px">Control de Existencias y Producciones</h1>
+        <p style="color:#888;font-size:12px;margin-top:0">Existencias globales — generado el ${fecha} por ${usuarioActual.nombre}</p>
+        ${certificadoPor ? `<p style="color:#1D9E75;font-weight:600;font-size:12px">✅ Certificado por ${certificadoPor}</p>` : ''}
+        <div style="display:flex;gap:14px;margin-top:14px;font-size:11px;color:#555">
+          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#1D9E75"></span>9 o más</span>
+          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#EF9F27"></span>6 a 8</span>
+          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#E24B4A"></span>0 a 5</span>
+          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#FF1744"></span>Negativo</span>
+        </div>
+        <table style="width:100%;border-collapse:separate;border-spacing:0 4px;margin-top:16px">
+          <thead><tr style="background:none">
+            <th style="padding:9px 12px;font-size:12.5px;text-align:left;color:#888;font-weight:500;border-bottom:2px solid #ddd">Sabor</th>
+            <th style="padding:9px 12px;font-size:12.5px;text-align:left;color:#888;font-weight:500;border-bottom:2px solid #ddd">Tipo</th>
+            <th style="padding:9px 12px;font-size:12.5px;text-align:right;color:#888;font-weight:500;border-bottom:2px solid #ddd">Cantidad</th>
+          </tr></thead>
+          <tbody>${filasHtml}</tbody>
+        </table>
+      </div>
+    </div>`;
 }
 
 /** Genera una imagen PNG (captura de pantalla) del reporte, usando html2canvas sobre un contenedor oculto. */
