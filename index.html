@@ -359,6 +359,7 @@ function shell(titulo, contenidoHtml) {
     <nav class="fixed inset-x-0 bottom-0 flex border-t border-neutral-200 bg-white">
       ${navBoton('diario', 'Diario')}
       ${navBoton('produccion', 'Producción')}
+      ${navBoton('historial', 'Historial')}
       ${navBoton('resumen', 'Resumen')}
       ${navBoton('global', 'Reporte')}
     </nav>
@@ -399,6 +400,7 @@ async function irAtras() {
 async function renderPantalla() {
   if (pantalla === 'diario') await vistaDiario();
   else if (pantalla === 'produccion') await vistaProduccion();
+  else if (pantalla === 'historial') await vistaHistorial();
   else if (pantalla === 'resumen') await vistaResumen();
   else if (pantalla === 'global') await vistaGlobal();
   else if (pantalla === 'configuracion') await vistaConfiguracion();
@@ -860,8 +862,9 @@ async function manejarArchivoExcel(file) {
 
 async function vistaProduccion() {
   const { data: lotes } = await supabase.from('produccion_mezclas').select('*').order('fecha_ingreso', { ascending: true });
-  const enCamara = (lotes || []).filter((l) => l.ubicacion === 'CAMARA');
-  const enSalon = (lotes || []).filter((l) => l.ubicacion === 'SALON');
+  const activos = (lotes || []).filter((l) => l.estado !== 'terminado');
+  const enCamara = activos.filter((l) => l.ubicacion === 'CAMARA');
+  const enSalon = activos.filter((l) => l.ubicacion === 'SALON');
   const permitido = puedeEscribir('produccion');
 
   function filaLote(l) {
@@ -872,7 +875,10 @@ async function vistaProduccion() {
         <p class="text-sm font-medium">${l.sabor} + ${l.complemento} ${l.estado === 'proxima' ? '<span class="ml-1 rounded-full bg-marca-light px-2 py-0.5 text-[10px] text-marca">próxima</span>' : ''}</p>
         <p class="text-[11px] text-neutral-400">Bloques: ${bloques} · ${fecha}</p>
       </div>
-      ${permitido ? `<button data-editar-fecha-lote="${l.id}" data-fecha-actual="${l.fecha_ingreso}" class="btn-editar-fecha p-1 text-neutral-400" aria-label="Editar fecha">📅</button>` : ''}
+      <div class="flex items-center gap-1">
+        ${permitido && l.ubicacion === 'SALON' ? `<button data-finalizar-lote="${l.id}" data-lote-sabor="${l.sabor}" data-lote-complemento="${l.complemento}" class="btn-finalizar-lote rounded-full border border-marca px-2 py-1 text-[10px] font-medium text-marca" aria-label="Finalizar y calificar">Finalizar</button>` : ''}
+        ${permitido ? `<button data-editar-fecha-lote="${l.id}" data-fecha-actual="${l.fecha_ingreso}" class="btn-editar-fecha p-1 text-neutral-400" aria-label="Editar fecha">📅</button>` : ''}
+      </div>
     </div>`;
   }
 
@@ -890,10 +896,17 @@ async function vistaProduccion() {
       <p class="mb-2 text-xs font-medium text-neutral-500">🏠 EN SALÓN (en uso)</p>
       ${enSalon.length ? enSalon.map(filaLote).join('') : '<p class="text-xs text-neutral-400">— vacío —</p>'}
     </section>
+    <section class="px-4 pt-5">
+      <button id="btn-ir-historial" class="flex w-full items-center justify-between rounded-xl border border-neutral-200 px-3 py-2.5 text-xs font-medium text-neutral-600">
+        <span>⭐ Historial de sabores realizados</span>
+        <span>→</span>
+      </button>
+    </section>
     ${permitido ? panelNuevaMezclaHtml() : ''}
     ${permitido ? panelEnUsoHtml(enCamara) : ''}
   `);
   montarShell();
+  document.getElementById('btn-ir-historial').addEventListener('click', () => cambiarPantalla('historial'));
   if (permitido) {
     document.getElementById('btn-nueva-mezcla').addEventListener('click', () => document.getElementById('panel-nueva-mezcla').classList.toggle('hidden'));
     document.getElementById('btn-en-uso').addEventListener('click', () => document.getElementById('panel-en-uso').classList.toggle('hidden'));
@@ -910,6 +923,18 @@ async function vistaProduccion() {
           if (error) return alert('No se pudo actualizar la fecha: ' + error.message);
           await vistaProduccion();
         });
+      });
+    });
+
+    document.querySelectorAll('.btn-finalizar-lote').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        abrirModalCalificar({
+          id: btn.dataset.finalizarLote,
+          sabor: btn.dataset.loteSabor,
+          complemento: btn.dataset.loteComplemento,
+          calificacionActual: null,
+          modo: 'finalizar'
+        }, vistaProduccion);
       });
     });
   }
@@ -1044,6 +1069,160 @@ function montarPanelEnUso() {
     const { error } = await supabase.from('produccion_mezclas').update({ estado: 'proxima' }).eq('id', loteId);
     if (error) { errorEl.textContent = error.message; errorEl.classList.remove('hidden'); return; }
     await vistaProduccion();
+  });
+}
+
+// ---------------- Calificar / finalizar lote ----------------
+
+/**
+ * Modal de estrellas (1 a 5) para finalizar un lote o editar la calificación
+ * de uno ya terminado. `lote.modo` es 'finalizar' o 'editar'.
+ */
+function abrirModalCalificar(lote, alConfirmar) {
+  document.getElementById('modal-calificar')?.remove();
+  let seleccion = lote.calificacionActual || 0;
+
+  const contenedor = document.createElement('div');
+  contenedor.id = 'modal-calificar';
+  contenedor.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4';
+  contenedor.innerHTML = `
+    <div class="w-full max-w-xs rounded-xl bg-white p-4">
+      <p class="mb-1 text-sm font-medium">${lote.modo === 'finalizar' ? 'Finalizar sabor' : 'Editar calificación'}</p>
+      <p class="mb-3 text-xs text-neutral-500">${lote.sabor} + ${lote.complemento}</p>
+      <p class="mb-2 text-xs text-neutral-500">¿Cómo le fue con el público?</p>
+      <div id="estrellas-picker" class="mb-4 flex gap-1 text-2xl"></div>
+      <p id="calificar-error" class="hidden text-xs text-rojo mb-2"></p>
+      <div class="flex gap-2">
+        <button id="btn-cancelar-calificar" class="h-9 flex-1 rounded-lg border border-neutral-200 text-xs text-neutral-500">Cancelar</button>
+        <button id="btn-confirmar-calificar" class="h-9 flex-1 rounded-lg bg-marca text-xs font-medium text-white">${lote.modo === 'finalizar' ? 'Finalizar' : 'Guardar'}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(contenedor);
+
+  const pickerEl = document.getElementById('estrellas-picker');
+  function pintarEstrellas() {
+    pickerEl.innerHTML = [1, 2, 3, 4, 5].map((n) =>
+      `<button type="button" data-estrella="${n}" class="leading-none ${n <= seleccion ? 'text-amarillo' : 'text-neutral-200'}">★</button>`
+    ).join('');
+    pickerEl.querySelectorAll('[data-estrella]').forEach((btn) => {
+      btn.addEventListener('click', () => { seleccion = Number(btn.dataset.estrella); pintarEstrellas(); });
+    });
+  }
+  pintarEstrellas();
+
+  document.getElementById('btn-cancelar-calificar').addEventListener('click', () => contenedor.remove());
+
+  document.getElementById('btn-confirmar-calificar').addEventListener('click', async () => {
+    const errorEl = document.getElementById('calificar-error');
+    errorEl.classList.add('hidden');
+    if (!seleccion) {
+      errorEl.textContent = 'Toca una estrella para calificar.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+    const cambios = { calificacion: seleccion };
+    if (lote.modo === 'finalizar') {
+      cambios.estado = 'terminado';
+      cambios.ubicacion = 'SALON';
+      cambios.finalizado_en = new Date().toISOString();
+      cambios.calificado_por = usuarioActual.nombre;
+    }
+    const { error } = await supabase.from('produccion_mezclas').update(cambios).eq('id', lote.id);
+    if (error) {
+      errorEl.textContent = 'No se pudo guardar: ' + error.message;
+      errorEl.classList.remove('hidden');
+      return;
+    }
+    contenedor.remove();
+    if (alConfirmar) await alConfirmar();
+  });
+}
+
+// ---------------- Historial de sabores ----------------
+
+let filtroHistorial = '';
+
+async function vistaHistorial() {
+  const permitido = puedeEscribir('produccion');
+  const { data: terminados } = await supabase
+    .from('produccion_mezclas')
+    .select('*')
+    .eq('estado', 'terminado')
+    .order('finalizado_en', { ascending: false });
+
+  const lista = terminados || [];
+  const filtrados = filtroHistorial
+    ? lista.filter((l) => `${l.sabor} ${l.complemento}`.toLowerCase().includes(filtroHistorial.toLowerCase()))
+    : lista;
+
+  // Promedio por combinación sabor + complemento, para ver qué mezclas repetir.
+  const promedios = {};
+  lista.forEach((l) => {
+    const clave = `${l.sabor} + ${l.complemento}`;
+    if (!promedios[clave]) promedios[clave] = { suma: 0, n: 0 };
+    promedios[clave].suma += l.calificacion || 0;
+    promedios[clave].n += 1;
+  });
+  const rankingTop = Object.entries(promedios)
+    .map(([clave, v]) => ({ clave, promedio: v.suma / v.n, n: v.n }))
+    .sort((a, b) => b.promedio - a.promedio)
+    .slice(0, 5);
+
+  function estrellasTexto(n) {
+    return `<span class="text-amarillo">${'★'.repeat(n)}</span><span class="text-neutral-200">${'★'.repeat(5 - n)}</span>`;
+  }
+
+  document.getElementById('app').innerHTML = shell('Historial de sabores', `
+    <section class="px-4 pt-4">
+      <input id="input-filtro-historial" type="text" placeholder="Buscar sabor…" value="${filtroHistorial}" class="mb-4" />
+    </section>
+
+    ${rankingTop.length ? `
+    <section class="px-4 pb-2">
+      <p class="mb-2 text-xs font-medium text-neutral-500">🏆 MEJOR RECIBIDOS</p>
+      <div class="flex flex-col gap-1.5 rounded-xl border border-neutral-100 p-3">
+        ${rankingTop.map((r) => `
+          <div class="flex items-center justify-between text-xs">
+            <span>${r.clave}</span>
+            <span>${estrellasTexto(Math.round(r.promedio))} <span class="text-neutral-400">(${r.n})</span></span>
+          </div>`).join('')}
+      </div>
+    </section>` : ''}
+
+    <section class="px-4 pt-4">
+      <p class="mb-2 text-xs font-medium text-neutral-500">REGISTRO</p>
+      ${filtrados.length ? filtrados.map((l) => {
+        const fecha = l.finalizado_en ? new Date(l.finalizado_en).toLocaleDateString('es-CL', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+        return `<div class="flex items-center justify-between border-b border-neutral-100 py-2.5">
+          <div>
+            <p class="text-sm font-medium">${l.sabor} + ${l.complemento}</p>
+            <p class="text-[11px] text-neutral-400">Finalizado ${fecha}${l.calificado_por ? ' · ' + l.calificado_por : ''}</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-sm">${estrellasTexto(l.calificacion || 0)}</span>
+            ${permitido ? `<button data-editar-calificacion="${l.id}" data-sabor="${l.sabor}" data-complemento="${l.complemento}" data-calificacion="${l.calificacion || 0}" class="btn-editar-calificacion p-1 text-neutral-400" aria-label="Editar calificación">✏️</button>` : ''}
+          </div>
+        </div>`;
+      }).join('') : '<p class="text-xs text-neutral-400">— aún no hay sabores finalizados —</p>'}
+    </section>
+  `);
+  montarShell();
+
+  document.getElementById('input-filtro-historial').addEventListener('input', (e) => {
+    filtroHistorial = e.target.value;
+    vistaHistorial();
+  });
+
+  document.querySelectorAll('.btn-editar-calificacion').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      abrirModalCalificar({
+        id: btn.dataset.editarCalificacion,
+        sabor: btn.dataset.sabor,
+        complemento: btn.dataset.complemento,
+        calificacionActual: Number(btn.dataset.calificacion),
+        modo: 'editar'
+      }, vistaHistorial);
+    });
   });
 }
 
@@ -1195,7 +1374,7 @@ async function vistaGlobal() {
   const items = stock || [];
 
   const { data: lotes } = await supabase.from('produccion_mezclas').select('*').order('fecha_ingreso', { ascending: true });
-  const lotesProduccion = lotes || [];
+  const lotesProduccion = (lotes || []).filter((l) => l.estado !== 'terminado');
 
   const { data: precios } = await supabase.from('precios_sabores').select('*');
   const mapaPrecios = new Map((precios || []).map((p) => [p.sabor.trim().toUpperCase(), p.precio]));
@@ -1522,6 +1701,12 @@ async function vistaConfiguracion() {
           <p id="msg-precios" class="hidden text-xs text-verde mt-1">Precios guardados.</p>
           <button type="submit" class="mt-2 h-9 rounded-lg bg-marca text-xs font-medium text-white">Guardar precios</button>
         </form>
+      </div>
+
+      <div class="rounded-xl border border-rojo/30 p-3">
+        <p class="mb-1 text-sm font-medium text-rojo">Zona de riesgo</p>
+        <p class="mb-3 text-[11px] text-neutral-400">Borra TODOS los movimientos, producción, compras y certificaciones — para partir de cero al terminar la marcha blanca. No borra usuarios, precios ni horarios. No se puede deshacer.</p>
+        <button id="btn-abrir-reinicio" class="h-9 rounded-lg border border-rojo text-rojo px-4 text-xs font-medium">Reiniciar existencias</button>
       </div>` : ''}
     </div>
   `);
@@ -1563,6 +1748,72 @@ async function vistaConfiguracion() {
     if (error) return alert('No se pudo descertificar: ' + error.message);
     await vistaConfiguracion();
   });
+
+  document.getElementById('btn-abrir-reinicio')?.addEventListener('click', abrirModalReinicio);
+}
+
+/** Modal de doble confirmación para el reinicio total de existencias (solo admin). */
+function abrirModalReinicio() {
+  const existente = document.getElementById('modal-reinicio');
+  if (existente) existente.remove();
+
+  const contenedor = document.createElement('div');
+  contenedor.id = 'modal-reinicio';
+  contenedor.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4';
+  contenedor.innerHTML = `
+    <div class="w-full max-w-xs rounded-xl bg-white p-4">
+      <p class="mb-2 text-sm font-medium text-rojo">Reiniciar existencias</p>
+      <p class="mb-3 text-xs text-neutral-600">Esto borra permanentemente: todos los movimientos del Diario, toda la Producción, Compras semanales y Certificaciones. No se puede deshacer.</p>
+      <label class="mb-3 flex items-start gap-2 text-xs text-neutral-600">
+        <input type="checkbox" id="chk-reinicio-entiendo" class="mt-0.5" />
+        Entiendo que esta acción no se puede deshacer.
+      </label>
+      <label class="mb-1 block text-xs text-neutral-500">Escribe REINICIAR para confirmar</label>
+      <input id="input-reinicio-confirmar" type="text" class="mb-3" autocomplete="off" />
+      <p id="reinicio-error" class="hidden text-xs text-rojo mb-2"></p>
+      <div class="flex gap-2">
+        <button id="btn-cancelar-reinicio" class="h-9 flex-1 rounded-lg border border-neutral-200 text-xs text-neutral-500">Cancelar</button>
+        <button id="btn-confirmar-reinicio" class="h-9 flex-1 rounded-lg bg-rojo text-xs font-medium text-white">Reiniciar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(contenedor);
+
+  document.getElementById('btn-cancelar-reinicio').addEventListener('click', () => contenedor.remove());
+
+  document.getElementById('btn-confirmar-reinicio').addEventListener('click', async () => {
+    const errorEl = document.getElementById('reinicio-error');
+    errorEl.classList.add('hidden');
+    const entiendo = document.getElementById('chk-reinicio-entiendo').checked;
+    const texto = document.getElementById('input-reinicio-confirmar').value.trim().toUpperCase();
+    if (!entiendo || texto !== 'REINICIAR') {
+      errorEl.textContent = 'Marca la casilla y escribe REINICIAR (en mayúsculas) para confirmar.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+    const btn = document.getElementById('btn-confirmar-reinicio');
+    btn.disabled = true;
+    btn.textContent = 'Reiniciando…';
+    try {
+      await ejecutarReinicioExistencias();
+      contenedor.remove();
+      alert('Existencias reiniciadas. Listo para partir con datos reales.');
+      await vistaConfiguracion();
+    } catch (err) {
+      errorEl.textContent = 'No se pudo reiniciar: ' + err.message;
+      errorEl.classList.remove('hidden');
+      btn.disabled = false;
+      btn.textContent = 'Reiniciar';
+    }
+  });
+}
+
+/** Borra, en el orden correcto (por llaves foráneas), todo lo acumulado durante la marcha blanca. */
+async function ejecutarReinicioExistencias() {
+  const tablas = ['produccion_movimientos', 'produccion_mezclas', 'diario_movimientos', 'certificaciones_semanales', 'compras_semanales'];
+  for (const tabla of tablas) {
+    const { error } = await supabase.from(tabla).delete().gte('id', 0);
+    if (error) throw error;
+  }
 }
 
 // ---------------- Arranque ----------------
