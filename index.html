@@ -190,7 +190,8 @@ function puedeEscribir(area) {
   if (!usuarioActual) return false;
   const permisos = {
     diario: ['admin', 'bodega'],
-    produccion: ['admin', 'produccion']
+    produccion: ['admin', 'produccion'],
+    compras: ['admin', 'bodega']
   };
   const permitidos = permisos[area];
   return permitidos ? permitidos.includes(usuarioActual.rol) : true;
@@ -858,6 +859,96 @@ async function manejarArchivoExcel(file) {
   }
 }
 
+// ---------------- Precios por Excel ----------------
+
+/** Busca en cualquier hoja del Excel una fila de encabezado con columnas SABOR/SABORES y PRECIO/PRECIOS. */
+function buscarTablaPreciosEnExcel(workbook) {
+  for (const nombreHoja of workbook.SheetNames) {
+    const hoja = workbook.Sheets[nombreHoja];
+    const filas = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: null });
+    for (let r = 0; r < filas.length; r++) {
+      const fila = (filas[r] || []).map((v) => (typeof v === 'string' ? v.trim().toUpperCase() : v));
+      const colSabor = fila.findIndex((v) => v === 'SABOR' || v === 'SABORES');
+      const colPrecio = fila.findIndex((v) => v === 'PRECIO' || v === 'PRECIOS');
+      if (colSabor !== -1 && colPrecio !== -1) return { filas, filaEncabezado: r, colSabor, colPrecio };
+    }
+  }
+  return null;
+}
+
+async function manejarArchivoExcelPrecios(file) {
+  const estadoEl = document.getElementById('estado-carga-precios');
+  estadoEl.className = 'px-0 pb-2 text-xs text-neutral-500';
+  estadoEl.textContent = 'Leyendo archivo...';
+  estadoEl.classList.remove('hidden');
+
+  try {
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: 'array' });
+    const tabla = buscarTablaPreciosEnExcel(workbook);
+
+    if (!tabla) {
+      estadoEl.className = 'px-0 pb-2 text-xs text-rojo';
+      estadoEl.textContent = 'No encontré una tabla con columnas SABOR y PRECIO en este Excel.';
+      return;
+    }
+
+    const { data: preciosActuales } = await supabase.from('precios_sabores').select('*');
+    const mapaActual = new Map((preciosActuales || []).map((p) => [p.sabor.trim().toUpperCase(), p.precio]));
+
+    const objetivos = [];
+    for (let r = tabla.filaEncabezado + 1; r < tabla.filas.length; r++) {
+      const fila = tabla.filas[r] || [];
+      const sabor = fila[tabla.colSabor];
+      const precio = fila[tabla.colPrecio];
+      if (!sabor || typeof sabor !== 'string') continue;
+      if (typeof precio !== 'number') continue;
+      objetivos.push({ sabor: sabor.trim().toUpperCase(), precio });
+    }
+
+    if (objetivos.length === 0) {
+      estadoEl.className = 'px-0 pb-2 text-xs text-rojo';
+      estadoEl.textContent = 'No encontré filas con sabor y precio numérico en ese archivo.';
+      return;
+    }
+
+    const cambios = objetivos.filter((o) => mapaActual.get(o.sabor) !== o.precio);
+    if (cambios.length === 0) {
+      estadoEl.className = 'px-0 pb-2 text-xs text-neutral-500';
+      estadoEl.textContent = 'El Excel coincide exactamente con los precios actuales — no hay nada que actualizar.';
+      return;
+    }
+
+    const resumenTexto = cambios.map((c) => {
+      const actual = mapaActual.get(c.sabor);
+      return `${c.sabor}: ${actual !== undefined ? '$' + actual : 'sin precio'} → $${c.precio}`;
+    }).join('\n');
+    const confirmar = window.confirm(`Se van a actualizar ${cambios.length} precios:\n\n${resumenTexto}\n\n¿Confirmas?`);
+    if (!confirmar) {
+      estadoEl.classList.add('hidden');
+      return;
+    }
+
+    const filasParaGuardar = cambios.map((c) => ({
+      sabor: c.sabor, precio: c.precio, actualizado_por: `${usuarioActual.nombre} (Excel)`, updated_at: new Date().toISOString()
+    }));
+    const { error } = await supabase.from('precios_sabores').upsert(filasParaGuardar, { onConflict: 'sabor' });
+    if (error) {
+      estadoEl.className = 'px-0 pb-2 text-xs text-rojo';
+      estadoEl.textContent = error.message;
+      return;
+    }
+
+    estadoEl.className = 'px-0 pb-2 text-xs text-verde';
+    estadoEl.textContent = `✅ ${cambios.length} precios actualizados.`;
+    document.getElementById('input-excel-precios').value = '';
+    setTimeout(() => vistaConfiguracion(), 1200);
+  } catch (err) {
+    estadoEl.className = 'px-0 pb-2 text-xs text-rojo';
+    estadoEl.textContent = 'No pude leer ese archivo: ' + err.message;
+  }
+}
+
 // ---------------- Producción ----------------
 
 async function vistaProduccion() {
@@ -1366,7 +1457,8 @@ const LAMINAS = {
   pulpas: { etiqueta: 'Pulpas y frutas', tipos: ['PULPA', 'FRUTA'] },
   syrops: { etiqueta: 'Syrops', tipos: ['BOLSA'] },
   hielo: { etiqueta: 'Hielo', tipos: ['CUBO', 'FRAPPE'] },
-  produccion: { etiqueta: 'Producción', tipos: [] } // se maneja aparte, no viene de stock_global
+  produccion: { etiqueta: 'Producción', tipos: [] }, // se maneja aparte, no viene de stock_global
+  fruteria: { etiqueta: 'Frutería', tipos: [] } // se maneja aparte, viene de compras_semanales
 };
 
 async function vistaGlobal() {
@@ -1376,6 +1468,10 @@ async function vistaGlobal() {
   const { data: lotes } = await supabase.from('produccion_mezclas').select('*').order('fecha_ingreso', { ascending: true });
   const lotesProduccion = (lotes || []).filter((l) => l.estado !== 'terminado');
 
+  const semana = semanaActual();
+  const { data: compras } = await supabase.from('compras_semanales').select('*').eq('semana_inicio', semana).order('producto');
+  const comprasSemana = compras || [];
+
   const { data: precios } = await supabase.from('precios_sabores').select('*');
   const mapaPrecios = new Map((precios || []).map((p) => [p.sabor.trim().toUpperCase(), p.precio]));
   const valorTotal = items.reduce((acc, i) => {
@@ -1384,7 +1480,6 @@ async function vistaGlobal() {
   }, 0);
   const formatoCLP = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(n);
 
-  const semana = semanaActual();
   const { data: certificacion } = await supabase
     .from('certificaciones_semanales').select('*').eq('semana_inicio', semana).maybeSingle();
 
@@ -1429,7 +1524,7 @@ async function vistaGlobal() {
       </div>
     </div>
 
-    ${laminaActual !== 'produccion' ? `
+    ${!['produccion', 'fruteria'].includes(laminaActual) ? `
     <div class="flex gap-2 overflow-x-auto px-4 pt-2">
       <select id="select-filtro-tipo-global" class="w-40">
         <option value="">Todos los tipos</option>
@@ -1437,12 +1532,31 @@ async function vistaGlobal() {
       </select>
     </div>` : ''}
 
+    ${laminaActual === 'fruteria' ? `
+    <div class="px-4 pt-3">
+      ${puedeEscribir('compras') ? `<button id="btn-nueva-compra" class="flex w-full items-center justify-center gap-1 rounded-lg border border-marca px-3 py-2 text-xs font-medium text-marca">+ Registrar compra</button>` : ''}
+      <form id="panel-nueva-compra" class="mt-3 hidden flex-col gap-2">
+        <div><label class="mb-1 block text-xs text-neutral-500">Producto</label><input id="campo-compra-producto" list="lista-productos-fruteria" required /></div>
+        <datalist id="lista-productos-fruteria">${[...new Set(comprasSemana.map((c) => c.producto))].map((p) => `<option value="${p}"></option>`).join('')}</datalist>
+        <div class="flex gap-2">
+          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Cantidad</label><input id="campo-compra-cantidad" type="number" step="any" required /></div>
+          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Formato</label><input id="campo-compra-formato" placeholder="KG / UNIDAD" required /></div>
+        </div>
+        <div class="flex gap-2">
+          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Proveedor</label><input id="campo-compra-proveedor" /></div>
+          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Precio unitario</label><input id="campo-compra-precio" type="number" step="any" placeholder="$" /></div>
+        </div>
+        <button type="submit" class="mt-1 h-9 rounded-lg bg-marca text-xs font-medium text-white">Guardar compra</button>
+      </form>
+    </div>` : ''}
+
+    ${!['produccion', 'fruteria'].includes(laminaActual) ? `
     <div class="flex gap-3 px-4 py-2">
       <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-verde"></span>9+</span>
       <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-amarillo"></span>6-8</span>
       <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-rojo"></span>0-5</span>
       <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-rojoFluor"></span>neg.</span>
-    </div>
+    </div>` : ''}
 
     <div id="lista-global" class="max-h-[50vh] overflow-y-auto px-2"></div>
 
@@ -1474,6 +1588,30 @@ async function vistaGlobal() {
     }
   });
 
+  document.getElementById('btn-nueva-compra')?.addEventListener('click', () => {
+    document.getElementById('panel-nueva-compra').classList.toggle('hidden');
+    document.getElementById('panel-nueva-compra').classList.toggle('flex');
+  });
+
+  document.getElementById('panel-nueva-compra')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const diasSemana = ['DOMINGO', 'LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO'];
+    const fila = {
+      semana_inicio: semana,
+      dia_semana: diasSemana[new Date().getDay()],
+      producto: document.getElementById('campo-compra-producto').value.trim(),
+      cantidad: Number(document.getElementById('campo-compra-cantidad').value),
+      formato: document.getElementById('campo-compra-formato').value.trim(),
+      proveedor: document.getElementById('campo-compra-proveedor').value.trim() || null,
+      precio_unitario: document.getElementById('campo-compra-precio').value ? Number(document.getElementById('campo-compra-precio').value) : null,
+      registrado_por: usuarioActual.nombre
+    };
+    if (!fila.producto || !fila.formato || Number.isNaN(fila.cantidad)) return alert('Completa producto, cantidad y formato.');
+    const { error } = await supabase.from('compras_semanales').insert([fila]);
+    if (error) return alert('No se pudo registrar la compra: ' + error.message);
+    await vistaGlobal();
+  });
+
   const cont = document.getElementById('lista-global');
 
   if (laminaActual === 'produccion') {
@@ -1492,6 +1630,28 @@ async function vistaGlobal() {
           <span class="rounded-full px-2.5 py-0.5 text-xs font-medium ${est.clase}">${totalBloques}</span>
         </div>`;
     }).join('') : `<p class="px-4 py-6 text-center text-sm text-neutral-400">No hay producción registrada.</p>`;
+    return;
+  }
+
+  if (laminaActual === 'fruteria') {
+    const puedeGestionar = puedeEscribir('compras');
+    cont.innerHTML = comprasSemana.length ? comprasSemana.map((c) => `
+      <div class="flex items-center justify-between border-b border-neutral-100 px-2 py-2">
+        <div class="flex-1">
+          <span class="block text-sm font-medium">${c.producto}</span>
+          <span class="block text-[10.5px] text-neutral-400">${c.cantidad} ${c.formato}${c.proveedor ? ' · ' + c.proveedor : ''} · ${c.dia_semana}${c.precio_unitario ? ' · $' + c.precio_unitario : ''}</span>
+        </div>
+        ${puedeGestionar ? `<button data-eliminar-compra="${c.id}" class="btn-eliminar-compra p-1 text-neutral-400" aria-label="Eliminar compra">🗑️</button>` : ''}
+      </div>`).join('') : `<p class="px-4 py-6 text-center text-sm text-neutral-400">Aún no hay compras registradas esta semana.</p>`;
+
+    document.querySelectorAll('.btn-eliminar-compra').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!window.confirm('¿Eliminar esta compra?')) return;
+        const { error } = await supabase.from('compras_semanales').delete().eq('id', btn.dataset.eliminarCompra);
+        if (error) return alert('No se pudo eliminar: ' + error.message);
+        await vistaGlobal();
+      });
+    });
     return;
   }
 
@@ -1692,6 +1852,17 @@ async function vistaConfiguracion() {
       <div>
         <p class="mb-1 text-sm font-medium">Precios por sabor</p>
         <p class="mb-3 text-[11px] text-neutral-400">Se usan para calcular el valor total de existencias en Global.</p>
+
+        <label class="mb-1 block text-xs text-neutral-500">Cargar desde Excel (columnas SABOR / PRECIO)</label>
+        <input id="input-excel-precios" type="file" accept=".xlsx,.xls" class="mb-1" />
+        <p id="estado-carga-precios" class="hidden px-0 pb-2 text-xs"></p>
+
+        <div class="my-3 flex items-center gap-2">
+          <div class="h-px flex-1 bg-neutral-100"></div>
+          <span class="text-[10.5px] text-neutral-400">o edítalos a mano</span>
+          <div class="h-px flex-1 bg-neutral-100"></div>
+        </div>
+
         <form id="form-precios" class="flex flex-col gap-2">
           ${saboresConPrecio.map((s) => `
             <div class="flex items-center gap-2">
@@ -1721,6 +1892,11 @@ async function vistaConfiguracion() {
       aplicarTamanoLetra(btn.dataset.tamano);
       vistaConfiguracion();
     });
+  });
+
+  document.getElementById('input-excel-precios')?.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) manejarArchivoExcelPrecios(file);
   });
 
   document.getElementById('form-precios')?.addEventListener('submit', async (e) => {
