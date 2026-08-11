@@ -1088,11 +1088,14 @@ function montarListenersTablaFruteria(semana, alGuardar) {
   });
 }
 
+let ultimoProveedorFruteria = '';
+let panelNuevaCompraAbierto = false;
+
 function formularioNuevaCompraHtml(comprasSemana) {
   return `
     <div class="px-4 pt-3">
-      <button id="btn-nueva-compra" class="flex w-full items-center justify-center gap-1 rounded-lg border border-marca px-3 py-2 text-xs font-medium text-marca">+ Registrar compra</button>
-      <form id="panel-nueva-compra" class="mt-3 hidden flex-col gap-2">
+      <button id="btn-nueva-compra" class="flex w-full items-center justify-center gap-1 rounded-lg border border-marca px-3 py-2 text-xs font-medium text-marca">+ Registrar entrada</button>
+      <form id="panel-nueva-compra" class="mt-3 ${panelNuevaCompraAbierto ? 'flex' : 'hidden'} flex-col gap-2">
         <div><label class="mb-1 block text-xs text-neutral-500">Producto</label><input id="campo-compra-producto" list="lista-productos-fruteria" required /></div>
         <datalist id="lista-productos-fruteria">${[...new Set(comprasSemana.map((c) => c.producto))].map((p) => `<option value="${p}"></option>`).join('')}</datalist>
         <div class="flex gap-2">
@@ -1100,16 +1103,17 @@ function formularioNuevaCompraHtml(comprasSemana) {
           <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Formato</label><input id="campo-compra-formato" placeholder="KG / UNIDAD" required /></div>
         </div>
         <div class="flex gap-2">
-          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Proveedor</label><input id="campo-compra-proveedor" /></div>
+          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Proveedor</label><input id="campo-compra-proveedor" value="${ultimoProveedorFruteria}" /></div>
           <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Precio unitario</label><input id="campo-compra-precio" type="number" step="any" placeholder="$" /></div>
         </div>
-        <button type="submit" class="mt-1 h-9 rounded-lg bg-marca text-xs font-medium text-white">Guardar compra</button>
+        <button type="submit" class="mt-1 h-9 rounded-lg bg-marca text-xs font-medium text-white">Guardar entrada</button>
       </form>
     </div>`;
 }
 
 function montarFormularioNuevaCompra(semana, alGuardar) {
   document.getElementById('btn-nueva-compra').addEventListener('click', () => {
+    panelNuevaCompraAbierto = !panelNuevaCompraAbierto;
     document.getElementById('panel-nueva-compra').classList.toggle('hidden');
     document.getElementById('panel-nueva-compra').classList.toggle('flex');
   });
@@ -1128,7 +1132,9 @@ function montarFormularioNuevaCompra(semana, alGuardar) {
     };
     if (!fila.producto || !fila.formato || Number.isNaN(fila.cantidad)) return alert('Completa producto, cantidad y formato.');
     const { error } = await supabase.from('compras_semanales').insert([fila]);
-    if (error) return alert('No se pudo registrar la compra: ' + error.message);
+    if (error) return alert('No se pudo registrar la entrada: ' + error.message);
+    ultimoProveedorFruteria = fila.proveedor || '';
+    panelNuevaCompraAbierto = true;
     await alGuardar();
   });
 }
@@ -1506,7 +1512,11 @@ async function vistaHistorial() {
 let vistaResumenActual = 'tarjetas';
 let abiertoResumen = null;
 
+let modoResumen = 'congelados';
+
 async function vistaResumen() {
+  if (modoResumen === 'fruteria') return vistaResumenFruteria();
+
   const { data: movimientos } = await supabase.from('diario_movimientos').select('sabor, tipo, cantidad, responsable').eq('semana_inicio', semanaActual());
   const filas = movimientos || [];
   const totalEntradas = filas.filter((f) => f.cantidad > 0).reduce((a, f) => a + f.cantidad, 0);
@@ -1524,6 +1534,7 @@ async function vistaResumen() {
   const tiposUnicos = [...new Set(filas.map((f) => f.tipo))].sort();
 
   app.innerHTML = shell('Resumen de la semana', `
+    ${toggleModoResumenHtml()}
     <div class="grid grid-cols-2 gap-2 px-4 pt-3">
       <div class="rounded-lg bg-neutral-50 p-2.5"><p class="text-[11px] text-neutral-500">Entradas</p><p class="text-xl font-medium">${totalEntradas}</p></div>
       <div class="rounded-lg bg-neutral-50 p-2.5"><p class="text-[11px] text-neutral-500">Salidas</p><p class="text-xl font-medium">${totalSalidas}</p></div>
@@ -1542,6 +1553,7 @@ async function vistaResumen() {
     <div id="contenido-resumen"></div>
   `);
   montarShell();
+  montarToggleModoResumen();
   document.getElementById('btn-vista-tarjetas').addEventListener('click', () => { vistaResumenActual = 'tarjetas'; vistaResumen(); });
   document.getElementById('btn-vista-tabla').addEventListener('click', () => { vistaResumenActual = 'tabla'; vistaResumen(); });
   document.getElementById('btn-compartir-resumen').addEventListener('click', () => compartirResumenTexto(porSabor, totalEntradas, totalSalidas));
@@ -1589,6 +1601,39 @@ async function vistaResumen() {
         </table>
       </div>`;
   }
+}
+
+function toggleModoResumenHtml() {
+  return `
+    <div class="flex gap-2 px-4 pt-3">
+      <button data-modo-resumen="congelados" class="flex-1 h-9 rounded-lg text-xs font-medium ${modoResumen === 'congelados' ? 'bg-marca text-white' : 'border border-neutral-200 text-neutral-500'}">❄️ Congelados</button>
+      <button data-modo-resumen="fruteria" class="flex-1 h-9 rounded-lg text-xs font-medium ${modoResumen === 'fruteria' ? 'bg-marca text-white' : 'border border-neutral-200 text-neutral-500'}">🍓 Frutería</button>
+    </div>`;
+}
+
+function montarToggleModoResumen() {
+  document.querySelectorAll('[data-modo-resumen]').forEach((btn) => {
+    btn.addEventListener('click', () => { modoResumen = btn.dataset.modoResumen; vistaResumen(); });
+  });
+}
+
+/** Resumen de la semana, solo lectura, filtrado a productos de frutería. */
+async function vistaResumenFruteria() {
+  const semana = semanaActual();
+  const { data: compras } = await supabase.from('compras_semanales').select('*').eq('semana_inicio', semana).order('producto');
+  const comprasSemana = compras || [];
+  const totalItems = comprasSemana.reduce((a, c) => a + Number(c.cantidad), 0);
+
+  app.innerHTML = shell('Resumen de la semana', `
+    ${toggleModoResumenHtml()}
+    <div class="px-4 pt-3">
+      <div class="rounded-lg bg-neutral-50 p-2.5"><p class="text-[11px] text-neutral-500">Total unidades ingresadas</p><p class="text-xl font-medium">${totalItems}</p></div>
+    </div>
+    <p class="px-4 pt-4 text-xs font-medium text-neutral-500">Frutería — semana actual</p>
+    <div class="px-2 py-2">${tablaFruteriaHtml(comprasSemana, { soloLectura: true })}</div>
+  `);
+  montarShell();
+  montarToggleModoResumen();
 }
 
 /**
