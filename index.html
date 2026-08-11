@@ -550,7 +550,25 @@ function abrirEditorMovimiento(m) {
   });
 }
 
+let modoDiario = 'congelados';
+
+function toggleModoDiarioHtml() {
+  return `
+    <div class="flex gap-2 px-4 pt-3">
+      <button data-modo-diario="congelados" class="flex-1 h-9 rounded-lg text-xs font-medium ${modoDiario === 'congelados' ? 'bg-marca text-white' : 'border border-neutral-200 text-neutral-500'}">❄️ Congelados</button>
+      <button data-modo-diario="fruteria" class="flex-1 h-9 rounded-lg text-xs font-medium ${modoDiario === 'fruteria' ? 'bg-marca text-white' : 'border border-neutral-200 text-neutral-500'}">🍓 Frutería</button>
+    </div>`;
+}
+
+function montarToggleModoDiario() {
+  document.querySelectorAll('[data-modo-diario]').forEach((btn) => {
+    btn.addEventListener('click', () => { modoDiario = btn.dataset.modoDiario; vistaDiario(); });
+  });
+}
+
 async function vistaDiario() {
+  if (modoDiario === 'fruteria') return vistaDiarioFruteria();
+
   const { data: movimientos } = await supabase
     .from('diario_movimientos').select('*').eq('semana_inicio', semanaActual())
     .order('fecha', { ascending: false }).limit(200);
@@ -568,6 +586,7 @@ async function vistaDiario() {
   const permitido = puedeEscribir('diario');
 
   app.innerHTML = shell('Diario de movimientos', `
+    ${toggleModoDiarioHtml()}
     ${!puedeEditarSemana ? `<p class="mx-4 mt-3 rounded-lg bg-neutral-50 p-2 text-[11px] text-neutral-500">🔒 Esta semana está certificada — los movimientos no se pueden editar ni borrar.</p>` : ''}
     ${permitido ? `<div class="flex justify-end px-4 pt-3">
       <button id="btn-cargar-excel" class="rounded-full border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600">📥 Cargar Excel</button>
@@ -595,6 +614,7 @@ async function vistaDiario() {
     <div id="lista-diario" class="px-2 py-2">${filas}</div>
   `);
   montarShell();
+  montarToggleModoDiario();
 
   document.querySelectorAll('.chip-accion').forEach((btn) => {
     btn.addEventListener('click', () => { filtroAccionDiario = btn.dataset.accionFiltro; vistaDiario(); });
@@ -604,6 +624,29 @@ async function vistaDiario() {
 
   if (permitido) montarFormularioDiario();
   montarBotonesEditarMovimiento();
+}
+
+/** Modo Frutería del Diario: registrar compras y ver la tabla semanal producto × día. */
+async function vistaDiarioFruteria() {
+  const semana = semanaActual();
+  const { data: compras } = await supabase.from('compras_semanales').select('*').eq('semana_inicio', semana).order('producto');
+  const comprasSemana = compras || [];
+  const permitido = puedeEscribir('compras');
+
+  app.innerHTML = shell('Diario de movimientos', `
+    ${toggleModoDiarioHtml()}
+    ${permitido ? formularioNuevaCompraHtml(comprasSemana) : ''}
+    <p class="px-4 pt-4 text-xs font-medium text-neutral-500">Compras de la semana</p>
+    <div class="px-2 py-2">${tablaFruteriaHtml(comprasSemana, { soloLectura: !permitido })}</div>
+    ${permitido ? `<p class="px-4 pb-4 text-[10.5px] text-neutral-400">Toca una celda para agregar, editar o borrar la cantidad de ese día.</p>` : ''}
+  `);
+  montarShell();
+  montarToggleModoDiario();
+
+  if (permitido) {
+    montarFormularioNuevaCompra(semana, () => vistaDiario());
+    montarListenersTablaFruteria(semana, () => vistaDiario());
+  }
 }
 
 function formularioDiarioHtml() {
@@ -947,6 +990,147 @@ async function manejarArchivoExcelPrecios(file) {
     estadoEl.className = 'px-0 pb-2 text-xs text-rojo';
     estadoEl.textContent = 'No pude leer ese archivo: ' + err.message;
   }
+}
+
+// ---------------- Frutería (tabla semanal producto × día) ----------------
+
+const DIAS_SEMANA_ORDEN = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO', 'DOMINGO'];
+const DIAS_SEMANA_CORTO = { LUNES: 'L', MARTES: 'M', MIERCOLES: 'X', JUEVES: 'J', VIERNES: 'V', SABADO: 'S', DOMINGO: 'D' };
+const COLORES_GRUPO_FRUTERIA = ['bg-rojo/10 text-rojo', 'bg-marca-light text-marca', 'bg-amarillo/10 text-amarillo', 'bg-verde/10 text-verde'];
+
+/** Arma la tabla semanal producto × día (como el Excel de "PROVEEDORES"), agrupada por proveedor. */
+function tablaFruteriaHtml(compras, opciones = {}) {
+  const soloLectura = !!opciones.soloLectura;
+  if (!compras.length) return `<p class="px-4 py-6 text-center text-sm text-neutral-400">Aún no hay compras registradas esta semana.</p>`;
+
+  const grupos = new Map(); // proveedor -> Map(clave -> fila)
+  compras.forEach((c) => {
+    const proveedor = c.proveedor || 'Sin proveedor';
+    if (!grupos.has(proveedor)) grupos.set(proveedor, new Map());
+    const productos = grupos.get(proveedor);
+    const clave = c.producto + '|' + c.formato;
+    if (!productos.has(clave)) productos.set(clave, { producto: c.producto, formato: c.formato, proveedor: c.proveedor || '', porDia: {}, total: 0 });
+    const fila = productos.get(clave);
+    const previo = fila.porDia[c.dia_semana]?.cantidad || 0;
+    fila.porDia[c.dia_semana] = { cantidad: previo + Number(c.cantidad) };
+    fila.total += Number(c.cantidad);
+  });
+
+  const bloques = [...grupos.entries()].map(([proveedor, productos], i) => {
+    const color = COLORES_GRUPO_FRUTERIA[i % COLORES_GRUPO_FRUTERIA.length];
+    const filas = [...productos.values()].map((f) => `
+      <tr>
+        <td class="sticky left-0 z-10 bg-white px-2 py-1.5 text-left text-xs font-medium">${f.producto}</td>
+        <td class="px-1 py-1.5 text-center text-[10px] text-neutral-400">${f.formato}</td>
+        ${DIAS_SEMANA_ORDEN.map((d) => {
+          const celda = f.porDia[d];
+          return `<td ${soloLectura ? '' : `data-celda-fruteria data-producto="${f.producto}" data-formato="${f.formato}" data-proveedor="${f.proveedor}" data-dia="${d}" data-cantidad-actual="${celda ? celda.cantidad : ''}"`} class="${soloLectura ? '' : 'cursor-pointer active:bg-marca-light'} border-l border-neutral-100 px-1 py-1.5 text-center text-xs ${celda ? '' : 'text-neutral-300'}">${celda ? celda.cantidad : '-'}</td>`;
+        }).join('')}
+        <td class="border-l border-neutral-200 bg-neutral-50 px-2 py-1.5 text-center text-xs font-semibold">${f.total}</td>
+      </tr>`).join('');
+    return `<tr><td colspan="${DIAS_SEMANA_ORDEN.length + 3}" class="${color} px-2 py-1 text-[11px] font-semibold">${proveedor}</td></tr>${filas}`;
+  }).join('');
+
+  return `
+    <div class="overflow-x-auto">
+      <table class="w-full border-collapse text-xs">
+        <thead>
+          <tr class="border-b border-neutral-200">
+            <th class="sticky left-0 z-10 bg-white px-2 py-1.5 text-left text-[10px] text-neutral-500">Producto</th>
+            <th class="px-1 py-1.5 text-[10px] text-neutral-500">Fmt</th>
+            ${DIAS_SEMANA_ORDEN.map((d) => `<th class="border-l border-neutral-100 px-1 py-1.5 text-[10px] text-neutral-500">${DIAS_SEMANA_CORTO[d]}</th>`).join('')}
+            <th class="border-l border-neutral-200 px-2 py-1.5 text-[10px] text-neutral-500">Total</th>
+          </tr>
+        </thead>
+        <tbody>${bloques}</tbody>
+      </table>
+    </div>`;
+}
+
+/** Permite tocar una celda de la tabla para agregar/editar/borrar la cantidad de ese producto ese día. */
+function montarListenersTablaFruteria(semana, alGuardar) {
+  document.querySelectorAll('[data-celda-fruteria]').forEach((celda) => {
+    celda.addEventListener('click', async () => {
+      const producto = celda.dataset.producto;
+      const formato = celda.dataset.formato;
+      const proveedor = celda.dataset.proveedor || null;
+      const dia = celda.dataset.dia;
+      const actual = celda.dataset.cantidadActual;
+      const texto = window.prompt(`${producto} (${formato}) — ${dia}\nCantidad (deja vacío para borrar):`, actual);
+      if (texto === null) return;
+
+      const { data: existentes } = await supabase.from('compras_semanales').select('*')
+        .eq('semana_inicio', semana).eq('producto', producto).eq('formato', formato).eq('dia_semana', dia);
+
+      if (texto.trim() === '') {
+        if (existentes && existentes.length) {
+          const { error } = await supabase.from('compras_semanales').delete().in('id', existentes.map((e) => e.id));
+          if (error) return alert('No se pudo borrar: ' + error.message);
+        }
+        return alGuardar();
+      }
+
+      const cantidad = Number(texto);
+      if (Number.isNaN(cantidad)) return alert('Escribe solo un número.');
+
+      if (existentes && existentes.length) {
+        const { error } = await supabase.from('compras_semanales').update({ cantidad }).eq('id', existentes[0].id);
+        if (error) return alert('No se pudo actualizar: ' + error.message);
+        if (existentes.length > 1) await supabase.from('compras_semanales').delete().in('id', existentes.slice(1).map((e) => e.id));
+      } else {
+        const { error } = await supabase.from('compras_semanales').insert([{
+          semana_inicio: semana, producto, formato, proveedor, dia_semana: dia, cantidad, registrado_por: usuarioActual.nombre
+        }]);
+        if (error) return alert('No se pudo registrar: ' + error.message);
+      }
+      alGuardar();
+    });
+  });
+}
+
+function formularioNuevaCompraHtml(comprasSemana) {
+  return `
+    <div class="px-4 pt-3">
+      <button id="btn-nueva-compra" class="flex w-full items-center justify-center gap-1 rounded-lg border border-marca px-3 py-2 text-xs font-medium text-marca">+ Registrar compra</button>
+      <form id="panel-nueva-compra" class="mt-3 hidden flex-col gap-2">
+        <div><label class="mb-1 block text-xs text-neutral-500">Producto</label><input id="campo-compra-producto" list="lista-productos-fruteria" required /></div>
+        <datalist id="lista-productos-fruteria">${[...new Set(comprasSemana.map((c) => c.producto))].map((p) => `<option value="${p}"></option>`).join('')}</datalist>
+        <div class="flex gap-2">
+          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Cantidad</label><input id="campo-compra-cantidad" type="number" step="any" required /></div>
+          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Formato</label><input id="campo-compra-formato" placeholder="KG / UNIDAD" required /></div>
+        </div>
+        <div class="flex gap-2">
+          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Proveedor</label><input id="campo-compra-proveedor" /></div>
+          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Precio unitario</label><input id="campo-compra-precio" type="number" step="any" placeholder="$" /></div>
+        </div>
+        <button type="submit" class="mt-1 h-9 rounded-lg bg-marca text-xs font-medium text-white">Guardar compra</button>
+      </form>
+    </div>`;
+}
+
+function montarFormularioNuevaCompra(semana, alGuardar) {
+  document.getElementById('btn-nueva-compra').addEventListener('click', () => {
+    document.getElementById('panel-nueva-compra').classList.toggle('hidden');
+    document.getElementById('panel-nueva-compra').classList.toggle('flex');
+  });
+  document.getElementById('panel-nueva-compra').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const diasSemana = ['DOMINGO', 'LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO'];
+    const fila = {
+      semana_inicio: semana,
+      dia_semana: diasSemana[new Date().getDay()],
+      producto: document.getElementById('campo-compra-producto').value.trim(),
+      cantidad: Number(document.getElementById('campo-compra-cantidad').value),
+      formato: document.getElementById('campo-compra-formato').value.trim(),
+      proveedor: document.getElementById('campo-compra-proveedor').value.trim() || null,
+      precio_unitario: document.getElementById('campo-compra-precio').value ? Number(document.getElementById('campo-compra-precio').value) : null,
+      registrado_por: usuarioActual.nombre
+    };
+    if (!fila.producto || !fila.formato || Number.isNaN(fila.cantidad)) return alert('Completa producto, cantidad y formato.');
+    const { error } = await supabase.from('compras_semanales').insert([fila]);
+    if (error) return alert('No se pudo registrar la compra: ' + error.message);
+    await alGuardar();
+  });
 }
 
 // ---------------- Producción ----------------
@@ -1534,20 +1718,7 @@ async function vistaGlobal() {
 
     ${laminaActual === 'fruteria' ? `
     <div class="px-4 pt-3">
-      ${puedeEscribir('compras') ? `<button id="btn-nueva-compra" class="flex w-full items-center justify-center gap-1 rounded-lg border border-marca px-3 py-2 text-xs font-medium text-marca">+ Registrar compra</button>` : ''}
-      <form id="panel-nueva-compra" class="mt-3 hidden flex-col gap-2">
-        <div><label class="mb-1 block text-xs text-neutral-500">Producto</label><input id="campo-compra-producto" list="lista-productos-fruteria" required /></div>
-        <datalist id="lista-productos-fruteria">${[...new Set(comprasSemana.map((c) => c.producto))].map((p) => `<option value="${p}"></option>`).join('')}</datalist>
-        <div class="flex gap-2">
-          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Cantidad</label><input id="campo-compra-cantidad" type="number" step="any" required /></div>
-          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Formato</label><input id="campo-compra-formato" placeholder="KG / UNIDAD" required /></div>
-        </div>
-        <div class="flex gap-2">
-          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Proveedor</label><input id="campo-compra-proveedor" /></div>
-          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Precio unitario</label><input id="campo-compra-precio" type="number" step="any" placeholder="$" /></div>
-        </div>
-        <button type="submit" class="mt-1 h-9 rounded-lg bg-marca text-xs font-medium text-white">Guardar compra</button>
-      </form>
+      <p class="rounded-lg bg-neutral-50 p-2 text-[11px] text-neutral-500">📖 Solo lectura. Para registrar compras de frutería, ve a Diario → 🍓 Frutería.</p>
     </div>` : ''}
 
     ${!['produccion', 'fruteria'].includes(laminaActual) ? `
@@ -1588,30 +1759,6 @@ async function vistaGlobal() {
     }
   });
 
-  document.getElementById('btn-nueva-compra')?.addEventListener('click', () => {
-    document.getElementById('panel-nueva-compra').classList.toggle('hidden');
-    document.getElementById('panel-nueva-compra').classList.toggle('flex');
-  });
-
-  document.getElementById('panel-nueva-compra')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const diasSemana = ['DOMINGO', 'LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO'];
-    const fila = {
-      semana_inicio: semana,
-      dia_semana: diasSemana[new Date().getDay()],
-      producto: document.getElementById('campo-compra-producto').value.trim(),
-      cantidad: Number(document.getElementById('campo-compra-cantidad').value),
-      formato: document.getElementById('campo-compra-formato').value.trim(),
-      proveedor: document.getElementById('campo-compra-proveedor').value.trim() || null,
-      precio_unitario: document.getElementById('campo-compra-precio').value ? Number(document.getElementById('campo-compra-precio').value) : null,
-      registrado_por: usuarioActual.nombre
-    };
-    if (!fila.producto || !fila.formato || Number.isNaN(fila.cantidad)) return alert('Completa producto, cantidad y formato.');
-    const { error } = await supabase.from('compras_semanales').insert([fila]);
-    if (error) return alert('No se pudo registrar la compra: ' + error.message);
-    await vistaGlobal();
-  });
-
   const cont = document.getElementById('lista-global');
 
   if (laminaActual === 'produccion') {
@@ -1634,24 +1781,7 @@ async function vistaGlobal() {
   }
 
   if (laminaActual === 'fruteria') {
-    const puedeGestionar = puedeEscribir('compras');
-    cont.innerHTML = comprasSemana.length ? comprasSemana.map((c) => `
-      <div class="flex items-center justify-between border-b border-neutral-100 px-2 py-2">
-        <div class="flex-1">
-          <span class="block text-sm font-medium">${c.producto}</span>
-          <span class="block text-[10.5px] text-neutral-400">${c.cantidad} ${c.formato}${c.proveedor ? ' · ' + c.proveedor : ''} · ${c.dia_semana}${c.precio_unitario ? ' · $' + c.precio_unitario : ''}</span>
-        </div>
-        ${puedeGestionar ? `<button data-eliminar-compra="${c.id}" class="btn-eliminar-compra p-1 text-neutral-400" aria-label="Eliminar compra">🗑️</button>` : ''}
-      </div>`).join('') : `<p class="px-4 py-6 text-center text-sm text-neutral-400">Aún no hay compras registradas esta semana.</p>`;
-
-    document.querySelectorAll('.btn-eliminar-compra').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        if (!window.confirm('¿Eliminar esta compra?')) return;
-        const { error } = await supabase.from('compras_semanales').delete().eq('id', btn.dataset.eliminarCompra);
-        if (error) return alert('No se pudo eliminar: ' + error.message);
-        await vistaGlobal();
-      });
-    });
+    cont.innerHTML = tablaFruteriaHtml(comprasSemana, { soloLectura: true });
     return;
   }
 
