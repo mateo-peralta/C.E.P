@@ -1162,7 +1162,7 @@ async function vistaProduccion() {
   function totalBloquesLote(l) {
     return [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].reduce((a, b) => a + (b || 0), 0);
   }
-  const totalExistencias = activos.reduce((a, l) => a + totalBloquesLote(l), 0);
+  const totalExistencias = enCamara.reduce((a, l) => a + totalBloquesLote(l), 0);
   const { data: config } = await supabase.from('configuracion_temporada').select('meta_produccion').eq('id', 1).maybeSingle();
   const metaProduccion = config?.meta_produccion || 400;
   const porcentaje = metaProduccion > 0 ? Math.min(100, Math.round((totalExistencias / metaProduccion) * 100)) : 0;
@@ -1191,7 +1191,7 @@ async function vistaProduccion() {
     <section class="px-4 pt-4">
       <div class="rounded-xl border border-neutral-200 p-3">
         <div class="flex items-center justify-between">
-          <p class="text-xs font-medium text-neutral-500">Total de existencias</p>
+          <p class="text-xs font-medium text-neutral-500">Total en Cámara ❄️</p>
           <p class="text-xs text-neutral-400">${totalExistencias} / ${metaProduccion}</p>
         </div>
         <div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-neutral-100">
