@@ -189,9 +189,9 @@ const FORMATO_SYROP = {
 function puedeEscribir(area) {
   if (!usuarioActual) return false;
   const permisos = {
-    diario: ['admin', 'bodega'],
+    diario: ['admin', 'bodega', 'produccion'],
     produccion: ['admin', 'produccion'],
-    compras: ['admin', 'bodega']
+    compras: ['admin', 'bodega', 'produccion']
   };
   const permitidos = permisos[area];
   return permitidos ? permitidos.includes(usuarioActual.rol) : true;
@@ -1017,11 +1017,14 @@ function tablaFruteriaHtml(compras, opciones = {}) {
     const clave = c.producto + '|' + c.formato;
     if (!productos.has(clave)) productos.set(clave, { producto: c.producto, formato: c.formato, proveedor: c.proveedor || '', porDia: {}, total: 0 });
     const fila = productos.get(clave);
-    const previo = fila.porDia[c.dia_semana]?.cantidad || 0;
-    fila.porDia[c.dia_semana] = { cantidad: previo + Number(c.cantidad) };
+    const previo = fila.porDia[c.dia_semana] || { cantidad: 0, registrantes: new Set() };
+    previo.cantidad += Number(c.cantidad);
+    previo.registrantes.add(c.registrado_por || '');
+    fila.porDia[c.dia_semana] = previo;
     fila.total += Number(c.cantidad);
   });
 
+  const esAdmin = usuarioActual.rol === 'admin';
   const bloques = [...grupos.entries()].map(([proveedor, productos], i) => {
     const color = COLORES_GRUPO_FRUTERIA[i % COLORES_GRUPO_FRUTERIA.length];
     const filas = [...productos.values()].map((f) => `
@@ -1030,7 +1033,9 @@ function tablaFruteriaHtml(compras, opciones = {}) {
         <td class="px-1 py-1.5 text-center text-[10px] text-neutral-400">${f.formato}</td>
         ${DIAS_SEMANA_ORDEN.map((d) => {
           const celda = f.porDia[d];
-          return `<td ${soloLectura ? '' : `data-celda-fruteria data-producto="${f.producto}" data-formato="${f.formato}" data-proveedor="${f.proveedor}" data-dia="${d}" data-cantidad-actual="${celda ? celda.cantidad : ''}"`} class="${soloLectura ? '' : 'cursor-pointer active:bg-marca-light'} border-l border-neutral-100 px-1 py-1.5 text-center text-xs ${celda ? '' : 'text-neutral-300'}">${celda ? celda.cantidad : '-'}</td>`;
+          const esPropia = !celda || esAdmin || [...celda.registrantes].every((r) => r && r.startsWith(usuarioActual.nombre));
+          const puedeEditarCelda = !soloLectura && esPropia;
+          return `<td ${puedeEditarCelda ? `data-celda-fruteria data-producto="${f.producto}" data-formato="${f.formato}" data-proveedor="${f.proveedor}" data-dia="${d}" data-cantidad-actual="${celda ? celda.cantidad : ''}"` : ''} class="${puedeEditarCelda ? 'cursor-pointer active:bg-marca-light' : ''} border-l border-neutral-100 px-1 py-1.5 text-center text-xs ${celda ? '' : 'text-neutral-300'}">${celda ? celda.cantidad : '-'}</td>`;
         }).join('')}
         <td class="border-l border-neutral-200 bg-neutral-50 px-2 py-1.5 text-center text-xs font-semibold">${f.total}</td>
       </tr>`).join('');
@@ -1154,6 +1159,14 @@ async function vistaProduccion() {
   const enSalon = activos.filter((l) => l.ubicacion === 'SALON');
   const permitido = puedeEscribir('produccion');
 
+  function totalBloquesLote(l) {
+    return [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].reduce((a, b) => a + (b || 0), 0);
+  }
+  const totalExistencias = activos.reduce((a, l) => a + totalBloquesLote(l), 0);
+  const { data: config } = await supabase.from('configuracion_temporada').select('meta_produccion').eq('id', 1).maybeSingle();
+  const metaProduccion = config?.meta_produccion || 400;
+  const porcentaje = metaProduccion > 0 ? Math.min(100, Math.round((totalExistencias / metaProduccion) * 100)) : 0;
+
   function filaLote(l) {
     const fecha = new Date(l.fecha_ingreso).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
     const bloques = [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].filter(Boolean).join('/');
@@ -1175,6 +1188,17 @@ async function vistaProduccion() {
         <button id="btn-en-uso" class="rounded-full border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600">En uso</button>
         <button id="btn-nueva-mezcla" class="rounded-full bg-marca px-3 py-1.5 text-xs font-medium text-white">+ Nueva mezcla</button>
       </div>` : ''}
+    <section class="px-4 pt-4">
+      <div class="rounded-xl border border-neutral-200 p-3">
+        <div class="flex items-center justify-between">
+          <p class="text-xs font-medium text-neutral-500">Total de existencias</p>
+          <p class="text-xs text-neutral-400">${totalExistencias} / ${metaProduccion}</p>
+        </div>
+        <div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-neutral-100">
+          <div class="h-full rounded-full ${totalExistencias >= metaProduccion ? 'bg-verde' : 'bg-marca'}" style="width:${porcentaje}%"></div>
+        </div>
+      </div>
+    </section>
     <section class="px-4 pt-4">
       <p class="mb-2 text-xs font-medium text-neutral-500">❄️ EN CÁMARA (más antiguo primero)</p>
       ${enCamara.length ? enCamara.map(filaLote).join('') : '<p class="text-xs text-neutral-400">— vacío —</p>'}
@@ -1987,12 +2011,16 @@ async function vistaConfiguracion() {
 
   let saboresConPrecio = [];
   let certificacionActual = null;
+  let metaProduccionActual = 400;
   if (esAdmin) {
     const { data: stock } = await supabase.from('stock_global').select('sabor').order('sabor');
     const { data: precios } = await supabase.from('precios_sabores').select('*');
     const mapaPrecios = new Map((precios || []).map((p) => [p.sabor.trim().toUpperCase(), p.precio]));
     const saboresUnicos = [...new Set((stock || []).map((s) => s.sabor))];
     saboresConPrecio = saboresUnicos.map((s) => ({ sabor: s, precio: mapaPrecios.get(s.trim().toUpperCase()) || '' }));
+
+    const { data: config } = await supabase.from('configuracion_temporada').select('meta_produccion').eq('id', 1).maybeSingle();
+    metaProduccionActual = config?.meta_produccion || 400;
 
     const { data: cert } = await supabase.from('certificaciones_semanales').select('*').eq('semana_inicio', semanaActual()).maybeSingle();
     certificacionActual = cert;
@@ -2055,6 +2083,16 @@ async function vistaConfiguracion() {
         </form>
       </div>
 
+      <div>
+        <p class="mb-1 text-sm font-medium">Meta de producción</p>
+        <p class="mb-3 text-[11px] text-neutral-400">Objetivo de unidades a alcanzar. Se muestra como barra de progreso en Producción.</p>
+        <form id="form-meta-produccion" class="flex items-center gap-2">
+          <input id="campo-meta-produccion" type="number" min="0" value="${metaProduccionActual}" class="flex-1" />
+          <button type="submit" class="h-9 rounded-lg bg-marca px-4 text-xs font-medium text-white">Guardar</button>
+        </form>
+        <p id="msg-meta-produccion" class="hidden text-xs text-verde mt-1">Meta guardada.</p>
+      </div>
+
       <div class="rounded-xl border border-rojo/30 p-3">
         <p class="mb-1 text-sm font-medium text-rojo">Zona de riesgo</p>
         <p class="mb-3 text-[11px] text-neutral-400">Borra TODOS los movimientos, producción, compras y certificaciones — para partir de cero al terminar la marcha blanca. No borra usuarios, precios ni horarios. No se puede deshacer.</p>
@@ -2073,6 +2111,17 @@ async function vistaConfiguracion() {
       aplicarTamanoLetra(btn.dataset.tamano);
       vistaConfiguracion();
     });
+  });
+
+  document.getElementById('form-meta-produccion')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const valor = Number(document.getElementById('campo-meta-produccion').value);
+    if (Number.isNaN(valor) || valor < 0) return alert('Ingresa un número válido.');
+    const { error } = await supabase.from('configuracion_temporada').update({ meta_produccion: valor }).eq('id', 1);
+    if (error) return alert('No se pudo guardar: ' + error.message);
+    const msg = document.getElementById('msg-meta-produccion');
+    msg.classList.remove('hidden');
+    setTimeout(() => msg.classList.add('hidden'), 2000);
   });
 
   document.getElementById('input-excel-precios')?.addEventListener('change', (e) => {
