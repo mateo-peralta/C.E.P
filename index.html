@@ -485,7 +485,7 @@ function abrirEditorMovimiento(m) {
         </div>
       </div>
       <label class="mb-1 block text-xs text-neutral-500">Cantidad</label>
-      <input id="edit-cantidad" type="number" step="0.01" value="${Math.abs(m.cantidad)}" class="mb-3" />
+      <input id="edit-cantidad" type="text" inputmode="decimal" value="${Math.abs(m.cantidad)}" class="mb-3" />
       <p id="edit-error" class="hidden text-xs text-rojo mb-2"></p>
       <div class="flex gap-2">
         <button id="btn-eliminar-mov" class="h-9 rounded-lg border border-rojo text-rojo px-3 text-xs font-medium">Eliminar</button>
@@ -528,7 +528,7 @@ function abrirEditorMovimiento(m) {
     const sabor = normalizarTexto(document.getElementById('edit-sabor').value);
     const tipo = normalizarTexto(document.getElementById('edit-tipo').value);
     const formato = normalizarTexto(document.getElementById('edit-formato').value);
-    const cantidadRaw = Number(document.getElementById('edit-cantidad').value);
+    const cantidadRaw = Number(document.getElementById('edit-cantidad').value.replace(',', '.'));
     const errorEl = document.getElementById('edit-error');
     errorEl.classList.add('hidden');
 
@@ -685,7 +685,7 @@ function formularioDiarioHtml() {
         </div>
         <p id="hint-auto" class="hidden text-[10.5px] text-marca mb-2">✨ Formato rellenado automáticamente según el syrop.</p>
         <label class="mb-1 block text-xs text-neutral-500">Cantidad</label>
-        <input id="campo-cantidad" type="number" step="0.01" class="mb-3" />
+        <input id="campo-cantidad" type="text" inputmode="decimal" class="mb-3" />
         <p id="error-diario" class="hidden text-xs text-rojo mb-2"></p>
         <p id="msg-ingresado" class="hidden text-center text-sm font-medium text-verde mb-2">✅ INGRESADO</p>
         <button type="submit" class="h-10 w-full rounded-lg bg-marca text-sm font-medium text-white">Registrar</button>
@@ -737,7 +737,7 @@ function montarFormularioDiario() {
     const sabor = normalizarTexto(document.getElementById('campo-sabor').value);
     const tipo = normalizarTexto(document.getElementById('campo-tipo').value);
     const formato = normalizarTexto(document.getElementById('campo-formato').value);
-    const cantidadRaw = Number(document.getElementById('campo-cantidad').value);
+    const cantidadRaw = Number(document.getElementById('campo-cantidad').value.replace(',', '.'));
     const accion = campoAccion.value;
 
     if (!sabor || !tipo || !formato || !cantidadRaw) {
@@ -1081,7 +1081,7 @@ function montarListenersTablaFruteria(semana, alGuardar) {
         return alGuardar();
       }
 
-      const cantidad = Number(texto);
+      const cantidad = Number(texto.replace(',', '.'));
       if (Number.isNaN(cantidad)) return alert('Escribe solo un número.');
 
       if (existentes && existentes.length) {
@@ -1110,12 +1110,12 @@ function formularioNuevaCompraHtml(productosHistoricos) {
         <div><label class="mb-1 block text-xs text-neutral-500">Producto</label><input id="campo-compra-producto" list="lista-productos-fruteria" required /></div>
         <datalist id="lista-productos-fruteria">${productosHistoricos.map((p) => `<option value="${p}"></option>`).join('')}</datalist>
         <div class="flex gap-2">
-          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Cantidad</label><input id="campo-compra-cantidad" type="number" step="any" required /></div>
+          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Cantidad</label><input id="campo-compra-cantidad" type="text" inputmode="decimal" placeholder="ej. 4,5" required /></div>
           <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Formato</label><input id="campo-compra-formato" placeholder="KG / UNIDAD" required /></div>
         </div>
         <div class="flex gap-2">
           <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Proveedor</label><input id="campo-compra-proveedor" value="${ultimoProveedorFruteria}" /></div>
-          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Precio unitario</label><input id="campo-compra-precio" type="number" step="any" placeholder="$" /></div>
+          <div class="flex-1"><label class="mb-1 block text-xs text-neutral-500">Precio unitario</label><input id="campo-compra-precio" type="text" inputmode="decimal" placeholder="$" /></div>
         </div>
         <button type="submit" class="mt-1 h-9 rounded-lg bg-marca text-xs font-medium text-white">Guardar entrada</button>
       </form>
@@ -1135,10 +1135,10 @@ function montarFormularioNuevaCompra(semana, alGuardar) {
       semana_inicio: semana,
       dia_semana: diasSemana[new Date().getDay()],
       producto: document.getElementById('campo-compra-producto').value.trim(),
-      cantidad: Number(document.getElementById('campo-compra-cantidad').value),
+      cantidad: Number(document.getElementById('campo-compra-cantidad').value.replace(',', '.')),
       formato: document.getElementById('campo-compra-formato').value.trim(),
       proveedor: document.getElementById('campo-compra-proveedor').value.trim() || null,
-      precio_unitario: document.getElementById('campo-compra-precio').value ? Number(document.getElementById('campo-compra-precio').value) : null,
+      precio_unitario: document.getElementById('campo-compra-precio').value ? Number(document.getElementById('campo-compra-precio').value.replace(',', '.')) : null,
       registrado_por: usuarioActual.nombre
     };
     if (!fila.producto || !fila.formato || Number.isNaN(fila.cantidad)) return alert('Completa producto, cantidad y formato.');
