@@ -211,7 +211,9 @@ async function render() {
       usuarioActual = data;
     }
     if (!usuarioActual) {
-      app.innerHTML = `<div class="p-6 text-center text-sm text-neutral-500">Tu cuenta no está vinculada a ningún perfil. Contacta al administrador.</div>`;
+      const { data: solicitud } = await supabase.from('solicitudes_acceso').select('*').eq('auth_user_id', session.user.id).maybeSingle();
+      app.innerHTML = vistaSinPerfil(solicitud);
+      montarSinPerfil();
     } else {
       const turno = await validarVentanaDeTurno();
       if (!turno.permitido) {
@@ -225,6 +227,33 @@ async function render() {
 
   pantallaCarga.classList.add('hidden');
   app.classList.remove('hidden');
+}
+
+function vistaSinPerfil(solicitud) {
+  let mensaje = 'Tu cuenta no está vinculada a ningún perfil. Contacta al administrador.';
+  let icono = '👤';
+  if (solicitud?.estado === 'pendiente') {
+    mensaje = 'Tu solicitud de acceso está pendiente de aprobación. Te avisaremos apenas el administrador la revise.';
+    icono = '⏳';
+  } else if (solicitud?.estado === 'rechazada') {
+    mensaje = 'Tu solicitud de acceso fue rechazada. Si crees que es un error, contacta al administrador.';
+    icono = '🚫';
+  }
+  return `
+  <main class="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+    ${LOGO_CORTO}
+    <p class="text-2xl">${icono}</p>
+    <p class="max-w-xs text-sm text-neutral-600">${mensaje}</p>
+    <button id="btn-logout-sin-perfil" class="mt-2 rounded-lg border border-neutral-200 px-4 py-2 text-xs text-neutral-500">Cerrar sesión</button>
+  </main>`;
+}
+
+function montarSinPerfil() {
+  document.getElementById('btn-logout-sin-perfil').addEventListener('click', async () => {
+    await supabase.auth.signOut();
+    usuarioActual = null;
+    await render();
+  });
 }
 
 function vistaBloqueadaPorTurno(razon) {
@@ -274,6 +303,36 @@ function vistaLogin() {
         <button type="submit" class="mt-1 h-10 rounded-lg bg-marca text-sm font-medium text-white active:scale-[0.98]">Iniciar sesión</button>
         <button type="button" id="btn-olvide-clave" class="text-xs text-marca">¿Olvidaste tu contraseña?</button>
       </form>
+
+      <button type="button" id="btn-mostrar-solicitud" class="mt-4 w-full text-center text-xs text-marca">¿Eres nuevo? Solicita acceso</button>
+
+      <form id="form-solicitud" class="mt-4 hidden flex-col gap-3 border-t border-neutral-100 pt-4">
+        <p class="text-xs text-neutral-500">Completa tus datos. Un administrador revisará tu solicitud antes de que puedas entrar.</p>
+        <div>
+          <label class="mb-1 block text-xs text-neutral-500">Tu nombre</label>
+          <input id="solicitud-nombre" type="text" autocomplete="off" required />
+        </div>
+        <div>
+          <label class="mb-1 block text-xs text-neutral-500">Nombre de usuario que quieres usar</label>
+          <input id="solicitud-username" type="text" autocomplete="off" required />
+        </div>
+        <div>
+          <label class="mb-1 block text-xs text-neutral-500">Correo</label>
+          <input id="solicitud-correo" type="email" autocomplete="off" required />
+        </div>
+        <div>
+          <label class="mb-1 block text-xs text-neutral-500">Contraseña</label>
+          <input id="solicitud-password" type="password" autocomplete="off" required minlength="6" />
+        </div>
+        <div>
+          <label class="mb-1 block text-xs text-neutral-500">Mensaje (opcional)</label>
+          <input id="solicitud-mensaje" type="text" autocomplete="off" placeholder="ej. quién eres o por qué necesitas acceso" />
+        </div>
+        <p id="error-solicitud" class="hidden text-xs text-rojo"></p>
+        <p id="msg-solicitud" class="hidden text-xs text-verde"></p>
+        <button type="submit" class="h-10 rounded-lg bg-marca text-sm font-medium text-white active:scale-[0.98]">Enviar solicitud</button>
+      </form>
+
       <div class="mt-6 rounded-lg bg-neutral-50 p-3 text-center">
         <p class="text-xs text-neutral-500">Tu sesión se cierra automáticamente al terminar el turno (aplica sin importar "Recuérdame").</p>
       </div>
@@ -340,6 +399,62 @@ function montarLogin() {
       return;
     }
     msgEl.textContent = 'Te enviamos un correo con un link para crear una nueva contraseña.';
+    msgEl.classList.remove('hidden');
+  });
+
+  document.getElementById('btn-mostrar-solicitud').addEventListener('click', () => {
+    const panel = document.getElementById('form-solicitud');
+    panel.classList.toggle('hidden');
+    panel.classList.toggle('flex');
+  });
+
+  document.getElementById('form-solicitud').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorEl = document.getElementById('error-solicitud');
+    const msgEl = document.getElementById('msg-solicitud');
+    errorEl.classList.add('hidden');
+    msgEl.classList.add('hidden');
+
+    const nombre = document.getElementById('solicitud-nombre').value.trim();
+    const username = document.getElementById('solicitud-username').value.trim();
+    const correo = document.getElementById('solicitud-correo').value.trim();
+    const password = document.getElementById('solicitud-password').value;
+    const mensaje = document.getElementById('solicitud-mensaje').value.trim() || null;
+
+    if (!nombre || !username || !correo || !password) {
+      errorEl.textContent = 'Completa todos los campos obligatorios.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    const { data: signUpData, error: errSignUp } = await supabase.auth.signUp({ email: correo, password });
+    if (errSignUp) {
+      errorEl.textContent = errSignUp.message.includes('already registered') || errSignUp.message.includes('already been registered')
+        ? 'Ese correo ya está registrado. Si ya enviaste una solicitud, espera la aprobación.'
+        : 'No se pudo crear tu cuenta: ' + errSignUp.message;
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    const authUserId = signUpData?.user?.id;
+    if (!authUserId) {
+      errorEl.textContent = 'No se pudo completar el registro. Intenta de nuevo.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    const { error: errSolicitud } = await supabase.from('solicitudes_acceso').insert([{
+      auth_user_id: authUserId, nombre, username, correo, mensaje
+    }]);
+    if (errSolicitud) {
+      errorEl.textContent = 'No se pudo enviar tu solicitud: ' + errSolicitud.message;
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    await supabase.auth.signOut();
+    document.getElementById('form-solicitud').reset();
+    msgEl.textContent = '✅ Solicitud enviada. Un administrador la revisará pronto — te avisaremos cuando puedas entrar.';
     msgEl.classList.remove('hidden');
   });
 }
@@ -2026,6 +2141,12 @@ async function vistaConfiguracion() {
     certificacionActual = cert;
   }
 
+  let solicitudesPendientes = [];
+  if (esAdmin) {
+    const { data: solicitudes } = await supabase.from('solicitudes_acceso').select('*').eq('estado', 'pendiente').order('created_at', { ascending: true });
+    solicitudesPendientes = solicitudes || [];
+  }
+
   app.innerHTML = shell('Configuración', `
     <div class="flex flex-col gap-6 p-4">
       <div>
@@ -2040,6 +2161,28 @@ async function vistaConfiguracion() {
         </div>
         <p class="mt-2 text-[10.5px] text-neutral-400">Se guarda en este dispositivo.</p>
       </div>
+
+      ${esAdmin ? `
+      <div>
+        <p class="mb-1 text-sm font-medium">Solicitudes de acceso ${solicitudesPendientes.length ? `<span class="ml-1 rounded-full bg-marca px-2 py-0.5 text-[10px] text-white">${solicitudesPendientes.length}</span>` : ''}</p>
+        <p class="mb-3 text-[11px] text-neutral-400">Personas que pidieron acceso desde la pantalla de login.</p>
+        ${solicitudesPendientes.length ? solicitudesPendientes.map((s) => `
+          <div class="mb-3 rounded-xl border border-neutral-200 p-3">
+            <p class="text-sm font-medium">${s.nombre} <span class="font-normal text-neutral-400">· @${s.username}</span></p>
+            <p class="text-[11px] text-neutral-500">${s.correo}</p>
+            ${s.mensaje ? `<p class="mt-1 text-[11px] text-neutral-500 italic">"${s.mensaje}"</p>` : ''}
+            <div class="mt-2 flex items-center gap-2">
+              <select data-rol-solicitud="${s.id}" class="w-28">
+                <option value="jefe" selected>jefe</option>
+                <option value="bodega">bodega</option>
+                <option value="produccion">produccion</option>
+                <option value="admin">admin</option>
+              </select>
+              <button data-aprobar-solicitud="${s.id}" class="btn-aprobar-solicitud h-8 flex-1 rounded-lg bg-marca text-xs font-medium text-white">Aprobar</button>
+              <button data-rechazar-solicitud="${s.id}" class="btn-rechazar-solicitud h-8 rounded-lg border border-rojo px-3 text-xs font-medium text-rojo">Rechazar</button>
+            </div>
+          </div>`).join('') : `<p class="text-xs text-neutral-400">No hay solicitudes pendientes.</p>`}
+      </div>` : ''}
 
       ${esAdmin ? `
       <div>
@@ -2145,6 +2288,48 @@ async function vistaConfiguracion() {
       msgEl.classList.remove('hidden');
       setTimeout(() => msgEl.classList.add('hidden'), 2500);
     }
+  });
+
+  document.querySelectorAll('.btn-aprobar-solicitud').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.aprobarSolicitud;
+      const solicitud = solicitudesPendientes.find((s) => String(s.id) === String(id));
+      if (!solicitud) return;
+      const rolElegido = document.querySelector(`[data-rol-solicitud="${id}"]`).value;
+
+      btn.disabled = true;
+      btn.textContent = 'Aprobando…';
+
+      const { error: errUsuario } = await supabase.from('usuarios_bot').insert([{
+        correo: solicitud.correo, username: solicitud.username, auth_user_id: solicitud.auth_user_id,
+        nombre: solicitud.nombre, rol: rolElegido, activo: true
+      }]);
+      if (errUsuario) {
+        alert('No se pudo crear el usuario: ' + errUsuario.message);
+        btn.disabled = false;
+        btn.textContent = 'Aprobar';
+        return;
+      }
+
+      const { error: errEstado } = await supabase.from('solicitudes_acceso').update({
+        estado: 'aprobada', revisado_por: usuarioActual.nombre, revisado_en: new Date().toISOString()
+      }).eq('id', id);
+      if (errEstado) alert('El usuario se creó, pero no se pudo actualizar el estado de la solicitud: ' + errEstado.message);
+
+      await vistaConfiguracion();
+    });
+  });
+
+  document.querySelectorAll('.btn-rechazar-solicitud').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.rechazarSolicitud;
+      if (!window.confirm('¿Rechazar esta solicitud de acceso?')) return;
+      const { error } = await supabase.from('solicitudes_acceso').update({
+        estado: 'rechazada', revisado_por: usuarioActual.nombre, revisado_en: new Date().toISOString()
+      }).eq('id', id);
+      if (error) return alert('No se pudo rechazar: ' + error.message);
+      await vistaConfiguracion();
+    });
   });
 
   document.getElementById('btn-descertificar')?.addEventListener('click', async () => {
