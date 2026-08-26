@@ -2142,9 +2142,13 @@ async function vistaConfiguracion() {
   }
 
   let solicitudesPendientes = [];
+  let todosLosUsuarios = [];
   if (esAdmin) {
     const { data: solicitudes } = await supabase.from('solicitudes_acceso').select('*').eq('estado', 'pendiente').order('created_at', { ascending: true });
     solicitudesPendientes = solicitudes || [];
+
+    const { data: usuarios } = await supabase.from('usuarios_bot').select('*').order('nombre');
+    todosLosUsuarios = usuarios || [];
   }
 
   app.innerHTML = shell('Configuración', `
@@ -2182,6 +2186,33 @@ async function vistaConfiguracion() {
               <button data-rechazar-solicitud="${s.id}" class="btn-rechazar-solicitud h-8 rounded-lg border border-rojo px-3 text-xs font-medium text-rojo">Rechazar</button>
             </div>
           </div>`).join('') : `<p class="text-xs text-neutral-400">No hay solicitudes pendientes.</p>`}
+      </div>` : ''}
+
+      ${esAdmin ? `
+      <div>
+        <p class="mb-1 text-sm font-medium">Usuarios</p>
+        <p class="mb-3 text-[11px] text-neutral-400">Cambia el rol o desactiva a alguien cuando sea necesario.</p>
+        ${todosLosUsuarios.map((u) => {
+          const esTuPropioUsuario = u.auth_user_id === usuarioActual.auth_user_id;
+          return `
+          <div class="mb-2 flex items-center gap-2 rounded-xl border border-neutral-200 p-3">
+            <div class="flex-1">
+              <p class="text-sm font-medium">${u.nombre} ${esTuPropioUsuario ? '<span class="text-[10px] text-neutral-400">(tú)</span>' : ''}</p>
+              <p class="text-[11px] text-neutral-400">@${u.username}${!u.activo ? ' · <span class="text-rojo">inactivo</span>' : ''}</p>
+            </div>
+            ${esTuPropioUsuario ? `
+              <span class="rounded-full bg-neutral-100 px-3 py-1.5 text-xs text-neutral-500">${u.rol}</span>
+            ` : `
+              <select data-cambiar-rol="${u.id}" class="w-28">
+                <option value="admin" ${u.rol === 'admin' ? 'selected' : ''}>admin</option>
+                <option value="bodega" ${u.rol === 'bodega' ? 'selected' : ''}>bodega</option>
+                <option value="produccion" ${u.rol === 'produccion' ? 'selected' : ''}>produccion</option>
+                <option value="jefe" ${u.rol === 'jefe' ? 'selected' : ''}>jefe</option>
+              </select>
+              <button data-toggle-activo="${u.id}" data-activo-actual="${u.activo}" class="btn-toggle-activo h-8 rounded-lg border px-2 text-xs font-medium ${u.activo ? 'border-rojo text-rojo' : 'border-verde text-verde'}">${u.activo ? 'Desactivar' : 'Activar'}</button>
+            `}
+          </div>`;
+        }).join('')}
       </div>` : ''}
 
       ${esAdmin ? `
@@ -2328,6 +2359,28 @@ async function vistaConfiguracion() {
         estado: 'rechazada', revisado_por: usuarioActual.nombre, revisado_en: new Date().toISOString()
       }).eq('id', id);
       if (error) return alert('No se pudo rechazar: ' + error.message);
+      await vistaConfiguracion();
+    });
+  });
+
+  document.querySelectorAll('[data-cambiar-rol]').forEach((select) => {
+    select.addEventListener('change', async () => {
+      const id = select.dataset.cambiarRol;
+      const nuevoRol = select.value;
+      const { error } = await supabase.from('usuarios_bot').update({ rol: nuevoRol }).eq('id', id);
+      if (error) return alert('No se pudo cambiar el rol: ' + error.message);
+      await vistaConfiguracion();
+    });
+  });
+
+  document.querySelectorAll('.btn-toggle-activo').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.toggleActivo;
+      const activoActual = btn.dataset.activoActual === 'true';
+      const accion = activoActual ? 'desactivar' : 'activar';
+      if (!window.confirm(`¿Seguro que quieres ${accion} a este usuario?`)) return;
+      const { error } = await supabase.from('usuarios_bot').update({ activo: !activoActual }).eq('id', id);
+      if (error) return alert('No se pudo actualizar: ' + error.message);
       await vistaConfiguracion();
     });
   });
