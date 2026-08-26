@@ -520,6 +520,7 @@ async function renderPantalla() {
   else if (pantalla === 'resumen') await vistaResumen();
   else if (pantalla === 'global') await vistaGlobal();
   else if (pantalla === 'configuracion') await vistaConfiguracion();
+  else if (pantalla === 'usuarios') await vistaUsuarios();
 }
 
 // ---------------- Diario ----------------
@@ -2141,14 +2142,10 @@ async function vistaConfiguracion() {
     certificacionActual = cert;
   }
 
-  let solicitudesPendientes = [];
-  let todosLosUsuarios = [];
+  let totalSolicitudesPendientes = 0;
   if (esAdmin) {
-    const { data: solicitudes } = await supabase.from('solicitudes_acceso').select('*').eq('estado', 'pendiente').order('created_at', { ascending: true });
-    solicitudesPendientes = solicitudes || [];
-
-    const { data: usuarios } = await supabase.from('usuarios_bot').select('*').order('nombre');
-    todosLosUsuarios = usuarios || [];
+    const { count } = await supabase.from('solicitudes_acceso').select('*', { count: 'exact', head: true }).eq('estado', 'pendiente');
+    totalSolicitudesPendientes = count || 0;
   }
 
   app.innerHTML = shell('Configuración', `
@@ -2167,53 +2164,13 @@ async function vistaConfiguracion() {
       </div>
 
       ${esAdmin ? `
-      <div>
-        <p class="mb-1 text-sm font-medium">Solicitudes de acceso ${solicitudesPendientes.length ? `<span class="ml-1 rounded-full bg-marca px-2 py-0.5 text-[10px] text-white">${solicitudesPendientes.length}</span>` : ''}</p>
-        <p class="mb-3 text-[11px] text-neutral-400">Personas que pidieron acceso desde la pantalla de login.</p>
-        ${solicitudesPendientes.length ? solicitudesPendientes.map((s) => `
-          <div class="mb-3 rounded-xl border border-neutral-200 p-3">
-            <p class="text-sm font-medium">${s.nombre} <span class="font-normal text-neutral-400">· @${s.username}</span></p>
-            <p class="text-[11px] text-neutral-500">${s.correo}</p>
-            ${s.mensaje ? `<p class="mt-1 text-[11px] text-neutral-500 italic">"${s.mensaje}"</p>` : ''}
-            <div class="mt-2 flex items-center gap-2">
-              <select data-rol-solicitud="${s.id}" class="w-28">
-                <option value="jefe" selected>jefe</option>
-                <option value="bodega">bodega</option>
-                <option value="produccion">produccion</option>
-                <option value="admin">admin</option>
-              </select>
-              <button data-aprobar-solicitud="${s.id}" class="btn-aprobar-solicitud h-8 flex-1 rounded-lg bg-marca text-xs font-medium text-white">Aprobar</button>
-              <button data-rechazar-solicitud="${s.id}" class="btn-rechazar-solicitud h-8 rounded-lg border border-rojo px-3 text-xs font-medium text-rojo">Rechazar</button>
-            </div>
-          </div>`).join('') : `<p class="text-xs text-neutral-400">No hay solicitudes pendientes.</p>`}
-      </div>` : ''}
-
-      ${esAdmin ? `
-      <div>
-        <p class="mb-1 text-sm font-medium">Usuarios</p>
-        <p class="mb-3 text-[11px] text-neutral-400">Cambia el rol o desactiva a alguien cuando sea necesario.</p>
-        ${todosLosUsuarios.map((u) => {
-          const esTuPropioUsuario = u.auth_user_id === usuarioActual.auth_user_id;
-          return `
-          <div class="mb-2 flex items-center gap-2 rounded-xl border border-neutral-200 p-3">
-            <div class="flex-1">
-              <p class="text-sm font-medium">${u.nombre} ${esTuPropioUsuario ? '<span class="text-[10px] text-neutral-400">(tú)</span>' : ''}</p>
-              <p class="text-[11px] text-neutral-400">@${u.username}${!u.activo ? ' · <span class="text-rojo">inactivo</span>' : ''}</p>
-            </div>
-            ${esTuPropioUsuario ? `
-              <span class="rounded-full bg-neutral-100 px-3 py-1.5 text-xs text-neutral-500">${u.rol}</span>
-            ` : `
-              <select data-cambiar-rol="${u.id}" class="w-28">
-                <option value="admin" ${u.rol === 'admin' ? 'selected' : ''}>admin</option>
-                <option value="bodega" ${u.rol === 'bodega' ? 'selected' : ''}>bodega</option>
-                <option value="produccion" ${u.rol === 'produccion' ? 'selected' : ''}>produccion</option>
-                <option value="jefe" ${u.rol === 'jefe' ? 'selected' : ''}>jefe</option>
-              </select>
-              <button data-toggle-activo="${u.id}" data-activo-actual="${u.activo}" class="btn-toggle-activo h-8 rounded-lg border px-2 text-xs font-medium ${u.activo ? 'border-rojo text-rojo' : 'border-verde text-verde'}">${u.activo ? 'Desactivar' : 'Activar'}</button>
-            `}
-          </div>`;
-        }).join('')}
-      </div>` : ''}
+      <button id="btn-ir-usuarios" class="flex w-full items-center justify-between rounded-xl border border-neutral-200 px-3 py-2.5 text-left">
+        <span class="flex items-center gap-2">
+          <span class="text-sm font-medium">👥 Usuarios y accesos</span>
+          ${totalSolicitudesPendientes ? `<span class="rounded-full bg-marca px-2 py-0.5 text-[10px] text-white">${totalSolicitudesPendientes} pendiente${totalSolicitudesPendientes > 1 ? 's' : ''}</span>` : ''}
+        </span>
+        <span class="text-neutral-400">→</span>
+      </button>` : ''}
 
       ${esAdmin ? `
       <div>
@@ -2276,6 +2233,8 @@ async function vistaConfiguracion() {
   `);
   montarShell();
 
+  document.getElementById('btn-ir-usuarios')?.addEventListener('click', () => cambiarPantalla('usuarios'));
+
   document.getElementById('btn-toggle-oscuro').addEventListener('click', () => {
     aplicarTema(temaGuardado() === 'oscuro' ? 'claro' : 'oscuro');
     vistaConfiguracion();
@@ -2321,6 +2280,163 @@ async function vistaConfiguracion() {
     }
   });
 
+  document.getElementById('btn-descertificar')?.addEventListener('click', async () => {
+    const confirmar = window.confirm('¿Descertificar la semana actual? Esto vuelve a permitir editar o borrar sus movimientos.');
+    if (!confirmar) return;
+    const { error } = await supabase.from('certificaciones_semanales').delete().eq('semana_inicio', semanaActual());
+    if (error) return alert('No se pudo descertificar: ' + error.message);
+    await vistaConfiguracion();
+  });
+
+  document.getElementById('btn-abrir-reinicio')?.addEventListener('click', abrirModalReinicio);
+}
+
+/** Modal de doble confirmación para el reinicio total de existencias (solo admin). */
+// ---------------- Usuarios y accesos ----------------
+
+let panelInvitarAbierto = false;
+
+/** Crea una cuenta de Auth para otra persona sin cerrar la sesión del admin actual. */
+async function crearCuentaAuthSinPerderSesion(correo, password) {
+  const clienteTemporal = createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
+  const { data, error } = await clienteTemporal.auth.signUp({ email: correo, password });
+  if (error) throw error;
+  if (!data?.user?.id) throw new Error('No se pudo crear la cuenta.');
+  return data.user.id;
+}
+
+async function vistaUsuarios() {
+  const { data: solicitudes } = await supabase.from('solicitudes_acceso').select('*').eq('estado', 'pendiente').order('created_at', { ascending: true });
+  const solicitudesPendientes = solicitudes || [];
+
+  const { data: usuarios } = await supabase.from('usuarios_bot').select('*').order('nombre');
+  const todosLosUsuarios = usuarios || [];
+
+  app.innerHTML = shell('Usuarios y accesos', `
+    <div class="flex flex-col gap-6 p-4">
+      <div>
+        <button id="btn-invitar-usuario" class="flex w-full items-center justify-center gap-1 rounded-lg bg-marca px-3 py-2.5 text-sm font-medium text-white">+ Invitar usuario nuevo</button>
+        <form id="form-invitar" class="mt-3 ${panelInvitarAbierto ? 'flex' : 'hidden'} flex-col gap-2 rounded-xl border border-neutral-200 p-3">
+          <div><label class="mb-1 block text-xs text-neutral-500">Nombre</label><input id="invitar-nombre" type="text" required /></div>
+          <div><label class="mb-1 block text-xs text-neutral-500">Usuario (para iniciar sesión)</label><input id="invitar-username" type="text" required /></div>
+          <div><label class="mb-1 block text-xs text-neutral-500">Correo</label><input id="invitar-correo" type="email" required /></div>
+          <div><label class="mb-1 block text-xs text-neutral-500">Contraseña temporal</label><input id="invitar-password" type="text" minlength="6" required /></div>
+          <div>
+            <label class="mb-1 block text-xs text-neutral-500">Rol</label>
+            <select id="invitar-rol">
+              <option value="jefe" selected>jefe (solo lectura)</option>
+              <option value="bodega">bodega</option>
+              <option value="produccion">produccion</option>
+              <option value="admin">admin</option>
+            </select>
+          </div>
+          <p id="error-invitar" class="hidden text-xs text-rojo"></p>
+          <p id="msg-invitar" class="hidden text-xs text-verde"></p>
+          <button type="submit" class="mt-1 h-9 rounded-lg bg-marca text-xs font-medium text-white">Crear e invitar</button>
+          <p class="text-[10.5px] text-neutral-400">Comparte tú mismo el usuario y la contraseña con esa persona — puede cambiarla después con "¿Olvidaste tu contraseña?" en el login.</p>
+        </form>
+      </div>
+
+      <div>
+        <p class="mb-1 text-sm font-medium">Solicitudes de acceso ${solicitudesPendientes.length ? `<span class="ml-1 rounded-full bg-marca px-2 py-0.5 text-[10px] text-white">${solicitudesPendientes.length}</span>` : ''}</p>
+        <p class="mb-3 text-[11px] text-neutral-400">Personas que pidieron acceso desde la pantalla de login.</p>
+        ${solicitudesPendientes.length ? solicitudesPendientes.map((s) => `
+          <div class="mb-3 rounded-xl border border-neutral-200 p-3">
+            <p class="text-sm font-medium">${s.nombre} <span class="font-normal text-neutral-400">· @${s.username}</span></p>
+            <p class="text-[11px] text-neutral-500">${s.correo}</p>
+            ${s.mensaje ? `<p class="mt-1 text-[11px] text-neutral-500 italic">"${s.mensaje}"</p>` : ''}
+            <div class="mt-2 flex items-center gap-2">
+              <select data-rol-solicitud="${s.id}" class="w-28">
+                <option value="jefe" selected>jefe</option>
+                <option value="bodega">bodega</option>
+                <option value="produccion">produccion</option>
+                <option value="admin">admin</option>
+              </select>
+              <button data-aprobar-solicitud="${s.id}" class="btn-aprobar-solicitud h-8 flex-1 rounded-lg bg-marca text-xs font-medium text-white">Aprobar</button>
+              <button data-rechazar-solicitud="${s.id}" class="btn-rechazar-solicitud h-8 rounded-lg border border-rojo px-3 text-xs font-medium text-rojo">Rechazar</button>
+            </div>
+          </div>`).join('') : `<p class="text-xs text-neutral-400">No hay solicitudes pendientes.</p>`}
+      </div>
+
+      <div>
+        <p class="mb-1 text-sm font-medium">Usuarios</p>
+        <p class="mb-3 text-[11px] text-neutral-400">Cambia el rol o desactiva a alguien cuando sea necesario.</p>
+        ${todosLosUsuarios.map((u) => {
+          const esTuPropioUsuario = u.auth_user_id === usuarioActual.auth_user_id;
+          return `
+          <div class="mb-2 flex items-center gap-2 rounded-xl border border-neutral-200 p-3">
+            <div class="flex-1">
+              <p class="text-sm font-medium">${u.nombre} ${esTuPropioUsuario ? '<span class="text-[10px] text-neutral-400">(tú)</span>' : ''}</p>
+              <p class="text-[11px] text-neutral-400">@${u.username}${!u.activo ? ' · <span class="text-rojo">inactivo</span>' : ''}</p>
+            </div>
+            ${esTuPropioUsuario ? `
+              <span class="rounded-full bg-neutral-100 px-3 py-1.5 text-xs text-neutral-500">${u.rol}</span>
+            ` : `
+              <select data-cambiar-rol="${u.id}" class="w-28">
+                <option value="admin" ${u.rol === 'admin' ? 'selected' : ''}>admin</option>
+                <option value="bodega" ${u.rol === 'bodega' ? 'selected' : ''}>bodega</option>
+                <option value="produccion" ${u.rol === 'produccion' ? 'selected' : ''}>produccion</option>
+                <option value="jefe" ${u.rol === 'jefe' ? 'selected' : ''}>jefe</option>
+              </select>
+              <button data-toggle-activo="${u.id}" data-activo-actual="${u.activo}" class="btn-toggle-activo h-8 rounded-lg border px-2 text-xs font-medium ${u.activo ? 'border-rojo text-rojo' : 'border-verde text-verde'}">${u.activo ? 'Desactivar' : 'Activar'}</button>
+            `}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  `);
+  montarShell();
+
+  document.getElementById('btn-invitar-usuario').addEventListener('click', () => {
+    panelInvitarAbierto = !panelInvitarAbierto;
+    document.getElementById('form-invitar').classList.toggle('hidden');
+    document.getElementById('form-invitar').classList.toggle('flex');
+  });
+
+  document.getElementById('form-invitar').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorEl = document.getElementById('error-invitar');
+    const msgEl = document.getElementById('msg-invitar');
+    errorEl.classList.add('hidden');
+    msgEl.classList.add('hidden');
+
+    const nombre = document.getElementById('invitar-nombre').value.trim();
+    const username = document.getElementById('invitar-username').value.trim();
+    const correo = document.getElementById('invitar-correo').value.trim();
+    const password = document.getElementById('invitar-password').value;
+    const rol = document.getElementById('invitar-rol').value;
+
+    if (!nombre || !username || !correo || !password) {
+      errorEl.textContent = 'Completa todos los campos.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    const btn = document.querySelector('#form-invitar button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = 'Creando…';
+
+    try {
+      const authUserId = await crearCuentaAuthSinPerderSesion(correo, password);
+      const { error: errInsert } = await supabase.from('usuarios_bot').insert([{
+        correo, username, auth_user_id: authUserId, nombre, rol, activo: true
+      }]);
+      if (errInsert) throw errInsert;
+
+      msgEl.textContent = `✅ Cuenta creada para ${nombre}. Comparte con esa persona el usuario "${username}" y la contraseña que definiste.`;
+      msgEl.classList.remove('hidden');
+      panelInvitarAbierto = true;
+      setTimeout(() => vistaUsuarios(), 2500);
+    } catch (err) {
+      errorEl.textContent = 'No se pudo crear la cuenta: ' + (err.message || err);
+      errorEl.classList.remove('hidden');
+      btn.disabled = false;
+      btn.textContent = 'Crear e invitar';
+    }
+  });
+
   document.querySelectorAll('.btn-aprobar-solicitud').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const id = btn.dataset.aprobarSolicitud;
@@ -2347,7 +2463,7 @@ async function vistaConfiguracion() {
       }).eq('id', id);
       if (errEstado) alert('El usuario se creó, pero no se pudo actualizar el estado de la solicitud: ' + errEstado.message);
 
-      await vistaConfiguracion();
+      await vistaUsuarios();
     });
   });
 
@@ -2359,7 +2475,7 @@ async function vistaConfiguracion() {
         estado: 'rechazada', revisado_por: usuarioActual.nombre, revisado_en: new Date().toISOString()
       }).eq('id', id);
       if (error) return alert('No se pudo rechazar: ' + error.message);
-      await vistaConfiguracion();
+      await vistaUsuarios();
     });
   });
 
@@ -2369,7 +2485,7 @@ async function vistaConfiguracion() {
       const nuevoRol = select.value;
       const { error } = await supabase.from('usuarios_bot').update({ rol: nuevoRol }).eq('id', id);
       if (error) return alert('No se pudo cambiar el rol: ' + error.message);
-      await vistaConfiguracion();
+      await vistaUsuarios();
     });
   });
 
@@ -2381,22 +2497,11 @@ async function vistaConfiguracion() {
       if (!window.confirm(`¿Seguro que quieres ${accion} a este usuario?`)) return;
       const { error } = await supabase.from('usuarios_bot').update({ activo: !activoActual }).eq('id', id);
       if (error) return alert('No se pudo actualizar: ' + error.message);
-      await vistaConfiguracion();
+      await vistaUsuarios();
     });
   });
-
-  document.getElementById('btn-descertificar')?.addEventListener('click', async () => {
-    const confirmar = window.confirm('¿Descertificar la semana actual? Esto vuelve a permitir editar o borrar sus movimientos.');
-    if (!confirmar) return;
-    const { error } = await supabase.from('certificaciones_semanales').delete().eq('semana_inicio', semanaActual());
-    if (error) return alert('No se pudo descertificar: ' + error.message);
-    await vistaConfiguracion();
-  });
-
-  document.getElementById('btn-abrir-reinicio')?.addEventListener('click', abrirModalReinicio);
 }
 
-/** Modal de doble confirmación para el reinicio total de existencias (solo admin). */
 function abrirModalReinicio() {
   const existente = document.getElementById('modal-reinicio');
   if (existente) existente.remove();
