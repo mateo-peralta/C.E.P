@@ -1338,7 +1338,7 @@ async function vistaProduccion() {
     document.getElementById('btn-nueva-mezcla').addEventListener('click', () => document.getElementById('panel-nueva-mezcla').classList.toggle('hidden'));
     document.getElementById('btn-en-uso').addEventListener('click', () => document.getElementById('panel-en-uso').classList.toggle('hidden'));
     montarFormularioProduccion();
-    montarPanelEnUso();
+    montarPanelEnUso(enCamara);
 
     document.querySelectorAll('.btn-editar-fecha').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -1459,6 +1459,7 @@ function panelEnUsoHtml(enCamara) {
         <p class="mb-2 text-xs font-medium">Pasar a salón ahora</p>
         <form id="form-traslado" class="flex flex-col gap-2">
           <select id="select-lote-traslado" required><option value="">Elige un lote de cámara</option>${opciones}</select>
+          <div id="checkboxes-traslado" class="hidden flex-col gap-1.5 rounded-lg bg-neutral-50 p-2"></div>
           <p id="error-traslado" class="hidden text-xs text-rojo"></p>
           <button type="submit" class="h-9 rounded-lg bg-marca px-4 text-xs font-medium text-white w-fit">Trasladar a salón</button>
         </form>
@@ -1476,15 +1477,86 @@ function panelEnUsoHtml(enCamara) {
     </div>`;
 }
 
-function montarPanelEnUso() {
+function montarPanelEnUso(enCamara) {
+  const SLOTS = ['bloques_uni1', 'bloques_uni2', 'bloques_uni3', 'bloques_uni4'];
+
+  function renderCheckboxesTraslado(lote) {
+    const cont = document.getElementById('checkboxes-traslado');
+    if (!lote) { cont.classList.add('hidden'); cont.classList.remove('flex'); cont.innerHTML = ''; return; }
+    const valores = SLOTS.map((s) => lote[s]).filter((v) => v !== null && v !== undefined && v !== 0);
+    if (valores.length <= 1) { cont.classList.add('hidden'); cont.classList.remove('flex'); cont.innerHTML = ''; return; }
+    cont.classList.remove('hidden');
+    cont.classList.add('flex');
+    cont.innerHTML = `
+      <p class="text-[10.5px] text-neutral-500 mb-1">Elige qué bloques trasladar — deja destildado lo que se queda en cámara:</p>
+      ${valores.map((v, i) => `
+        <label class="flex items-center gap-2 text-xs">
+          <input type="checkbox" class="chk-bloque-traslado" data-valor="${v}" checked />
+          Bloque de ${v}
+        </label>`).join('')}
+    `;
+  }
+
+  document.getElementById('select-lote-traslado').addEventListener('change', (e) => {
+    const lote = enCamara.find((l) => String(l.id) === String(e.target.value));
+    renderCheckboxesTraslado(lote);
+  });
+
   document.getElementById('form-traslado').addEventListener('submit', async (e) => {
     e.preventDefault();
     const loteId = document.getElementById('select-lote-traslado').value;
     const errorEl = document.getElementById('error-traslado');
+    errorEl.classList.add('hidden');
     if (!loteId) return;
-    const { data: lote, error } = await supabase.from('produccion_mezclas').update({ ubicacion: 'SALON' }).eq('id', loteId).select().single();
-    if (error) { errorEl.textContent = error.message; errorEl.classList.remove('hidden'); return; }
-    await supabase.from('produccion_movimientos').insert([{ produccion_id: lote.id, tipo: 'traslado_salon', responsable: usuarioActual.nombre }]);
+
+    const lote = enCamara.find((l) => String(l.id) === String(loteId));
+    if (!lote) return;
+
+    const checkboxes = [...document.querySelectorAll('.chk-bloque-traslado')];
+
+    async function trasladoCompleto() {
+      const { data: actualizado, error } = await supabase.from('produccion_mezclas').update({ ubicacion: 'SALON' }).eq('id', loteId).select().single();
+      if (error) { errorEl.textContent = error.message; errorEl.classList.remove('hidden'); return; }
+      await supabase.from('produccion_movimientos').insert([{ produccion_id: actualizado.id, tipo: 'traslado_salon', responsable: usuarioActual.nombre }]);
+      await vistaProduccion();
+    }
+
+    // Lote de un solo bloque (o sin checkboxes visibles): traslado completo, como siempre
+    if (checkboxes.length === 0) return trasladoCompleto();
+
+    const seleccionados = checkboxes.filter((c) => c.checked).map((c) => Number(c.dataset.valor));
+    const noSeleccionados = checkboxes.filter((c) => !c.checked).map((c) => Number(c.dataset.valor));
+
+    if (seleccionados.length === 0) {
+      errorEl.textContent = 'Selecciona al menos un bloque para trasladar.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    // Se seleccionó todo: mismo resultado que un traslado completo
+    if (noSeleccionados.length === 0) return trasladoCompleto();
+
+    // Traslado parcial: el lote se divide en dos — una parte viaja a salón, el resto queda en cámara
+    const [nb1 = null, nb2 = null, nb3 = null, nb4 = null] = seleccionados;
+    const [rb1 = null, rb2 = null, rb3 = null, rb4 = null] = noSeleccionados;
+
+    const { data: nuevoLote, error: errCrear } = await supabase.from('produccion_mezclas').insert([{
+      ubicacion: 'SALON', sabor: lote.sabor, complemento: lote.complemento,
+      bloques_uni1: nb1, bloques_uni2: nb2, bloques_uni3: nb3, bloques_uni4: nb4,
+      fecha_ingreso: lote.fecha_ingreso, preparado_por: lote.preparado_por, encargado_turno: lote.encargado_turno
+    }]).select().single();
+    if (errCrear) { errorEl.textContent = errCrear.message; errorEl.classList.remove('hidden'); return; }
+
+    const { error: errActualizar } = await supabase.from('produccion_mezclas').update({
+      bloques_uni1: rb1, bloques_uni2: rb2, bloques_uni3: rb3, bloques_uni4: rb4
+    }).eq('id', loteId);
+    if (errActualizar) {
+      errorEl.textContent = 'Se creó el traslado, pero no se pudo actualizar lo que queda en cámara: ' + errActualizar.message;
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    await supabase.from('produccion_movimientos').insert([{ produccion_id: nuevoLote.id, tipo: 'traslado_salon', responsable: usuarioActual.nombre }]);
     await vistaProduccion();
   });
 
