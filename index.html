@@ -558,7 +558,7 @@ function filtrarMovimientosDiario(movimientos) {
   });
 }
 
-function montarBotonesEditarMovimiento() {
+function montarBotonesEditarMovimiento(alGuardar) {
   document.querySelectorAll('.btn-editar-mov').forEach((btn) => {
     btn.addEventListener('click', () => {
       abrirEditorMovimiento({
@@ -567,12 +567,13 @@ function montarBotonesEditarMovimiento() {
         tipo: btn.dataset.movTipo,
         formato: btn.dataset.movFormato,
         cantidad: Number(btn.dataset.movCantidad)
-      });
+      }, alGuardar);
     });
   });
 }
 
-function abrirEditorMovimiento(m) {
+function abrirEditorMovimiento(m, alGuardar) {
+  const refrescar = alGuardar || refrescarListaDiario;
   const existente = document.getElementById('modal-editar-mov');
   if (existente) existente.remove();
 
@@ -637,7 +638,7 @@ function abrirEditorMovimiento(m) {
       return;
     }
     contenedor.remove();
-    await refrescarListaDiario();
+    await refrescar();
   });
 
   document.getElementById('btn-guardar-mov').addEventListener('click', async () => {
@@ -662,7 +663,7 @@ function abrirEditorMovimiento(m) {
       return;
     }
     contenedor.remove();
-    await refrescarListaDiario();
+    await refrescar();
   });
 }
 
@@ -1919,6 +1920,12 @@ async function vistaGlobal() {
   const { data: compras } = await supabase.from('compras_semanales').select('*').eq('semana_inicio', semana).order('producto');
   const comprasSemana = compras || [];
 
+  let productosHistoricosGlobal = [];
+  if (puedeEscribir('compras')) {
+    const { data: todasLasCompras } = await supabase.from('compras_semanales').select('producto').order('producto');
+    productosHistoricosGlobal = [...new Set((todasLasCompras || []).map((c) => c.producto))];
+  }
+
   const { data: precios } = await supabase.from('precios_sabores').select('*');
   const mapaPrecios = new Map((precios || []).map((p) => [p.sabor.trim().toUpperCase(), p.precio]));
   const valorTotal = items.reduce((acc, i) => {
@@ -1979,9 +1986,10 @@ async function vistaGlobal() {
       </select>
     </div>` : ''}
 
-    ${laminaActual === 'fruteria' ? `
+    ${laminaActual === 'fruteria' && puedeEscribir('compras') ? formularioNuevaCompraHtml(productosHistoricosGlobal) : ''}
+    ${laminaActual === 'fruteria' && !puedeEscribir('compras') ? `
     <div class="px-4 pt-3">
-      <p class="rounded-lg bg-neutral-50 p-2 text-[11px] text-neutral-500">📖 Solo lectura. Para registrar compras de frutería, ve a Diario → 🍓 Frutería.</p>
+      <p class="rounded-lg bg-neutral-50 p-2 text-[11px] text-neutral-500">📖 Solo lectura.</p>
     </div>` : ''}
 
     ${!['produccion', 'fruteria'].includes(laminaActual) ? `
@@ -2022,6 +2030,10 @@ async function vistaGlobal() {
     }
   });
 
+  if (laminaActual === 'fruteria' && puedeEscribir('compras')) {
+    montarFormularioNuevaCompra(semana, () => vistaGlobal());
+  }
+
   const cont = document.getElementById('lista-global');
 
   if (laminaActual === 'produccion') {
@@ -2044,7 +2056,9 @@ async function vistaGlobal() {
   }
 
   if (laminaActual === 'fruteria') {
-    cont.innerHTML = tablaFruteriaHtml(comprasSemana, { soloLectura: true });
+    const permitidoFruteria = puedeEscribir('compras');
+    cont.innerHTML = tablaFruteriaHtml(comprasSemana, { soloLectura: !permitidoFruteria });
+    if (permitidoFruteria) montarListenersTablaFruteria(semana, () => vistaGlobal());
     return;
   }
 
@@ -2059,32 +2073,57 @@ async function vistaGlobal() {
         <span class="h-full w-1 self-stretch rounded" style="background-color:${colorBarra}"></span>
         <span class="flex-1"><span class="block text-sm font-medium">${item.sabor}</span><span class="block text-[10.5px] text-neutral-400">${item.tipo}</span></span>
         <span class="rounded-full px-2.5 py-0.5 text-xs font-medium ${est.clase}">${item.total}</span>
-        ${puedeEditar ? `<button data-editar-sabor="${item.sabor}" data-editar-tipo="${item.tipo}" data-editar-actual="${item.total}" class="btn-editar-existencia p-1 text-neutral-400" aria-label="Editar existencia">✏️</button>` : ''}
+        ${puedeEditar ? `<button data-ver-sabor="${item.sabor}" data-ver-tipo="${item.tipo}" class="btn-ver-movimientos-sabor p-1 text-neutral-400" aria-label="Ver y editar movimientos">✏️</button>` : ''}
       </div>`;
   }).join('') : `<p class="px-4 py-6 text-center text-sm text-neutral-400">Sin productos en esta lámina.</p>`;
 
-  document.querySelectorAll('.btn-editar-existencia').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const sabor = btn.dataset.editarSabor;
-      const tipo = btn.dataset.editarTipo;
-      const actual = Number(btn.dataset.editarActual);
-      const nuevoTexto = window.prompt(`Cantidad real de ${sabor} (${tipo}):`, actual);
-      if (nuevoTexto === null) return;
-      const nuevo = Number(nuevoTexto);
-      if (Number.isNaN(nuevo)) return alert('Escribe solo un número.');
-      const delta = nuevo - actual;
-      if (delta === 0) return;
-
-      const { error } = await supabase.from('diario_movimientos').insert([{
-        formato: formatoParaTipoSabor(sabor, tipo),
-        sabor, tipo, cantidad: delta,
-        responsable: `${usuarioActual.nombre} (ajuste manual)`,
-        semana_inicio: semanaActual()
-      }]);
-      if (error) return alert('No se pudo ajustar: ' + error.message);
-      await vistaGlobal();
-    });
+  document.querySelectorAll('.btn-ver-movimientos-sabor').forEach((btn) => {
+    btn.addEventListener('click', () => abrirModalMovimientosSabor(btn.dataset.verSabor, btn.dataset.verTipo));
   });
+}
+
+/** Modal de Reporte/Global: lista los movimientos de la semana para un sabor+tipo y permite editarlos/eliminarlos con el mismo editor de Diario. */
+async function abrirModalMovimientosSabor(sabor, tipo) {
+  document.getElementById('modal-movimientos-sabor')?.remove();
+
+  async function cargarYPintar() {
+    const { data: movimientos } = await supabase
+      .from('diario_movimientos').select('*')
+      .eq('sabor', sabor).eq('tipo', tipo).eq('semana_inicio', semanaActual())
+      .order('fecha', { ascending: false });
+
+    const { data: certificacion } = await supabase
+      .from('certificaciones_semanales').select('*').eq('semana_inicio', semanaActual()).maybeSingle();
+    const puedeEditarSemana = !certificacion;
+
+    const lista = movimientos || [];
+    const filas = lista.map((m) => filaMovimientoDiario(m, puedeEditarSemana)).join('')
+      || `<p class="px-2 py-6 text-center text-sm text-neutral-400">No hay movimientos esta semana para ${sabor}.</p>`;
+
+    const listaEl = document.getElementById('lista-movimientos-sabor');
+    const avisoEl = document.getElementById('aviso-semana-certificada-sabor');
+    if (listaEl) listaEl.innerHTML = filas;
+    if (avisoEl) avisoEl.classList.toggle('hidden', puedeEditarSemana);
+    montarBotonesEditarMovimiento(cargarYPintar);
+    await vistaGlobal(); // refresca los totales de fondo sin cerrar este modal (vive fuera de #app)
+  }
+
+  const contenedor = document.createElement('div');
+  contenedor.id = 'modal-movimientos-sabor';
+  contenedor.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4';
+  contenedor.innerHTML = `
+    <div class="flex max-h-[80vh] w-full max-w-sm flex-col rounded-xl bg-white p-4">
+      <div class="mb-2 flex items-center justify-between">
+        <p class="text-sm font-medium">${sabor} · ${tipo}</p>
+        <button id="btn-cerrar-modal-movimientos" class="text-neutral-400" aria-label="Cerrar">✕</button>
+      </div>
+      <p id="aviso-semana-certificada-sabor" class="hidden mb-2 rounded-lg bg-neutral-50 p-2 text-[11px] text-neutral-500">🔒 Esta semana está certificada — no se puede editar.</p>
+      <div id="lista-movimientos-sabor" class="overflow-y-auto"></div>
+    </div>`;
+  document.body.appendChild(contenedor);
+  document.getElementById('btn-cerrar-modal-movimientos').addEventListener('click', () => contenedor.remove());
+
+  await cargarYPintar();
 }
 
 /** Filtra los items según lo elegido en "Exportar reporte" (Todo / Pulpas y frutas / Syrops / Hielo). */
