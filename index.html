@@ -104,7 +104,7 @@ const app = document.getElementById('app');
 const pantallaCarga = document.getElementById('pantalla-carga');
 
 let usuarioActual = null; // fila de usuarios_bot
-let pantalla = 'resumen';
+let pantalla = 'inicio';
 let historialPantallas = [];
 
 const LOGO_CORTO = `
@@ -369,6 +369,8 @@ function montarLogin() {
       return;
     }
     usuarioActual = null;
+    pantalla = 'inicio';
+    historialPantallas = [];
     await render();
   });
 
@@ -466,7 +468,7 @@ function shell(titulo, contenidoHtml) {
   return `
     <header class="flex items-center gap-2 border-b border-neutral-200 px-4 py-3">
       ${historialPantallas.length > 0 ? `<button id="btn-atras" aria-label="Volver atrás" class="p-1 text-neutral-500">←</button>` : ''}
-      <button id="btn-ir-resumen" aria-label="Ir a Resumen">${LOGO_CORTO}</button>
+      <button id="btn-ir-inicio" aria-label="Ir a Inicio">${LOGO_CORTO}</button>
       <p class="flex-1 text-sm font-medium text-marca">${titulo}</p>
       <button id="btn-config" aria-label="Configuración" class="p-1 text-neutral-500"><i class="ti ti-settings"></i>⚙</button>
       <button id="btn-logout" aria-label="Cerrar sesión" class="p-1 text-xs text-neutral-400">Salir</button>
@@ -489,7 +491,7 @@ function navBoton(clave, etiqueta) {
 
 function montarShell() {
   document.getElementById('btn-atras')?.addEventListener('click', irAtras);
-  document.getElementById('btn-ir-resumen')?.addEventListener('click', () => cambiarPantalla('resumen'));
+  document.getElementById('btn-ir-inicio')?.addEventListener('click', () => cambiarPantalla('inicio'));
   document.getElementById('btn-logout')?.addEventListener('click', async () => {
     await supabase.auth.signOut();
     usuarioActual = null;
@@ -509,18 +511,76 @@ async function cambiarPantalla(clave) {
 
 async function irAtras() {
   const anterior = historialPantallas.pop();
-  pantalla = anterior || 'resumen';
+  pantalla = anterior || 'inicio';
   await renderPantalla();
 }
 
 async function renderPantalla() {
-  if (pantalla === 'diario') await vistaDiario();
+  if (pantalla === 'inicio') await vistaInicio();
+  else if (pantalla === 'diario') await vistaDiario();
   else if (pantalla === 'produccion') await vistaProduccion();
   else if (pantalla === 'historial') await vistaHistorial();
   else if (pantalla === 'resumen') await vistaResumen();
   else if (pantalla === 'global') await vistaGlobal();
   else if (pantalla === 'configuracion') await vistaConfiguracion();
   else if (pantalla === 'usuarios') await vistaUsuarios();
+}
+
+// ---------------- Inicio ----------------
+
+const MENSAJES_BIENVENIDA = [
+  '¡Qué bueno verte por aquí!',
+  'Listo para otro turno productivo.',
+  'Todo en orden por aquí.',
+  '¿Por dónde quieres empezar hoy?',
+  'A seguir controlando el negocio.',
+  'Tu equipo cuenta contigo.'
+];
+
+function saludoSegunHora() {
+  const hora = new Date().getHours();
+  if (hora < 12) return 'Buenos días';
+  if (hora < 19) return 'Buenas tardes';
+  return 'Buenas noches';
+}
+
+async function vistaInicio() {
+  const mensaje = MENSAJES_BIENVENIDA[Math.floor(Math.random() * MENSAJES_BIENVENIDA.length)];
+  const esAdmin = usuarioActual.rol === 'admin';
+
+  const accesos = [
+    { clave: 'diario', etiqueta: 'Diario', emoji: '📒' },
+    { clave: 'produccion', etiqueta: 'Producción', emoji: '🏭' },
+    { clave: 'historial', etiqueta: 'Historial', emoji: '⭐' },
+    { clave: 'resumen', etiqueta: 'Resumen', emoji: '📊' },
+    { clave: 'global', etiqueta: 'Reporte', emoji: '📈' }
+  ];
+
+  app.innerHTML = shell('Inicio', `
+    <div class="flex flex-col items-center px-6 pt-10 pb-6 text-center">
+      ${LOGO_COMPLETO}
+      <p class="mt-4 text-lg font-medium text-marca">${saludoSegunHora()}, ${usuarioActual.nombre}</p>
+      <p class="mt-1 text-sm text-neutral-500">${mensaje}</p>
+    </div>
+    <p class="px-6 pb-2 text-xs font-medium text-neutral-400">¿Por dónde quieres empezar?</p>
+    <div class="grid grid-cols-2 gap-3 px-6">
+      ${accesos.map((a) => `
+        <button data-ir="${a.clave}" class="btn-acceso-inicio flex flex-col items-center gap-2 rounded-2xl border border-neutral-200 py-6 text-sm font-medium text-neutral-700 active:bg-marca-light">
+          <span class="text-2xl">${a.emoji}</span>
+          ${a.etiqueta}
+        </button>`).join('')}
+      ${esAdmin ? `
+        <button data-ir="configuracion" class="btn-acceso-inicio flex flex-col items-center gap-2 rounded-2xl border border-neutral-200 py-6 text-sm font-medium text-neutral-700 active:bg-marca-light">
+          <span class="text-2xl">⚙️</span>
+          Configuración
+        </button>` : ''}
+    </div>
+  `);
+  montarShell();
+
+  document.querySelectorAll('.btn-acceso-inicio').forEach((btn) => {
+    btn.addEventListener('click', () => cambiarPantalla(btn.dataset.ir));
+  });
 }
 
 // ---------------- Diario ----------------
