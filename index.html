@@ -1900,7 +1900,6 @@ async function compartirResumenTexto(porSabor, totalEntradas, totalSalidas) {
 
 let laminaActual = 'pulpas';
 let filtroTipoGlobal = '';
-let filtroExportar = 'todo'; // 'todo' | 'pulpas' | 'syrops' | 'hielo'
 const LAMINAS = {
   pulpas: { etiqueta: 'Pulpas y frutas', tipos: ['PULPA', 'FRUTA'] },
   syrops: { etiqueta: 'Syrops', tipos: ['BOLSA'] },
@@ -1962,22 +1961,6 @@ async function vistaGlobal() {
       ${Object.entries(LAMINAS).map(([clave, l]) => `<button data-lamina="${clave}" class="whitespace-nowrap rounded-full px-3 py-1.5 text-xs ${laminaActual === clave ? 'bg-marca text-white' : 'border border-neutral-200 text-neutral-500'}">${l.etiqueta}</button>`).join('')}
     </div>
 
-    <div class="mx-4 mt-3 rounded-lg bg-neutral-50 p-3">
-      <p class="mb-2 text-xs font-medium text-neutral-600">Exportar reporte</p>
-      <div class="flex gap-2 overflow-x-auto mb-3">
-        ${[
-          { clave: 'todo', etiqueta: 'Todo' },
-          { clave: 'pulpas', etiqueta: 'Pulpas y frutas' },
-          { clave: 'syrops', etiqueta: 'Syrops' },
-          { clave: 'hielo', etiqueta: 'Hielo' }
-        ].map((f) => `<button data-filtro-exportar="${f.clave}" class="whitespace-nowrap rounded-full px-3 py-1 text-[11px] ${filtroExportar === f.clave ? 'bg-marca text-white' : 'border border-neutral-200 text-neutral-500'}">${f.etiqueta}</button>`).join('')}
-      </div>
-      <div class="flex gap-2">
-        <button id="btn-descargar-pdf" class="flex-1 h-9 rounded-lg border border-neutral-300 text-xs font-medium text-neutral-600">⬇ PDF</button>
-        <button id="btn-descargar-captura" class="flex-1 h-9 rounded-lg border border-neutral-300 text-xs font-medium text-neutral-600">📷 Captura</button>
-      </div>
-    </div>
-
     ${!['produccion', 'fruteria'].includes(laminaActual) ? `
     <div class="flex gap-2 overflow-x-auto px-4 pt-2">
       <select id="select-filtro-tipo-global" class="w-40">
@@ -2017,11 +2000,6 @@ async function vistaGlobal() {
     btn.addEventListener('click', () => { laminaActual = btn.dataset.lamina; vistaGlobal(); });
   });
   document.getElementById('select-filtro-tipo-global')?.addEventListener('change', (e) => { filtroTipoGlobal = e.target.value; vistaGlobal(); });
-  document.getElementById('btn-descargar-pdf').addEventListener('click', () => descargarPdfExistencias(itemsParaExportar(items)));
-  document.getElementById('btn-descargar-captura').addEventListener('click', () => capturarPantallaExistencias(itemsParaExportar(items)));
-  document.querySelectorAll('[data-filtro-exportar]').forEach((btn) => {
-    btn.addEventListener('click', () => { filtroExportar = btn.dataset.filtroExportar; vistaGlobal(); });
-  });
   document.getElementById('btn-certificar')?.addEventListener('click', async () => {
     const { error } = await supabase.from('certificaciones_semanales').insert([{ semana_inicio: semana, certificado_por: usuarioActual.nombre }]);
     if (!error) {
@@ -2124,13 +2102,6 @@ async function abrirModalMovimientosSabor(sabor, tipo) {
   document.getElementById('btn-cerrar-modal-movimientos').addEventListener('click', () => contenedor.remove());
 
   await cargarYPintar();
-}
-
-/** Filtra los items según lo elegido en "Exportar reporte" (Todo / Pulpas y frutas / Syrops / Hielo). */
-function itemsParaExportar(items) {
-  if (filtroExportar === 'todo') return items;
-  const tipos = LAMINAS[filtroExportar]?.tipos || [];
-  return items.filter((i) => tipos.includes(i.tipo));
 }
 
 /** Arma el HTML del reporte (reutilizado tanto por el PDF como por la captura de pantalla). */
