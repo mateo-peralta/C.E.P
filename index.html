@@ -49,6 +49,7 @@
   html.dark .text-neutral-400 { color: #737373 !important; }
   html.dark input, html.dark select { background-color: #262626; border-color: #404040; color: #f5f5f5; }
   html.dark input::placeholder { color: #737373; }
+  html.dark .btn-acceso-inicio.border-black { border-color: #ffffff; }
 </style>
 </head>
 <body class="min-h-screen bg-neutral-50 text-neutral-900">
@@ -565,12 +566,12 @@ async function vistaInicio() {
     <p class="px-6 pb-2 text-xs font-medium text-neutral-400">¿Por dónde quieres empezar?</p>
     <div class="grid grid-cols-2 gap-3 px-6">
       ${accesos.map((a) => `
-        <button data-ir="${a.clave}" class="btn-acceso-inicio flex flex-col items-center gap-2 rounded-2xl border border-neutral-200 py-6 text-sm font-medium text-neutral-700 active:bg-marca-light">
+        <button data-ir="${a.clave}" class="btn-acceso-inicio flex flex-col items-center gap-2 rounded-2xl border-2 border-black py-6 text-sm font-medium text-neutral-700 active:bg-marca-light">
           <span class="text-2xl">${a.emoji}</span>
           ${a.etiqueta}
         </button>`).join('')}
       ${esAdmin ? `
-        <button data-ir="configuracion" class="btn-acceso-inicio flex flex-col items-center gap-2 rounded-2xl border border-neutral-200 py-6 text-sm font-medium text-neutral-700 active:bg-marca-light">
+        <button data-ir="configuracion" class="btn-acceso-inicio flex flex-col items-center gap-2 rounded-2xl border-2 border-black py-6 text-sm font-medium text-neutral-700 active:bg-marca-light">
           <span class="text-2xl">⚙️</span>
           Configuración
         </button>` : ''}
