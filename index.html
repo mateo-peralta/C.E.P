@@ -170,10 +170,22 @@ function semanaActual() {
   return new Date(hoy.setDate(diff)).toISOString().slice(0, 10);
 }
 
+let umbralRojo = 5;
+let umbralAmarillo = 8;
+
+/** Carga los umbrales de alerta de stock guardados en Configuración (o usa los valores por defecto). */
+async function cargarUmbrales() {
+  const { data } = await supabase.from('configuracion_temporada').select('umbral_rojo, umbral_amarillo').eq('id', 1).maybeSingle();
+  if (data) {
+    umbralRojo = data.umbral_rojo ?? 5;
+    umbralAmarillo = data.umbral_amarillo ?? 8;
+  }
+}
+
 function estadoStock(cantidad) {
   if (cantidad < 0) return { clase: 'bg-rojoFluor text-white', valor: cantidad };
-  if (cantidad <= 5) return { clase: 'bg-rojo/10 text-rojo', valor: cantidad };
-  if (cantidad <= 8) return { clase: 'bg-amarillo/10 text-amarillo', valor: cantidad };
+  if (cantidad <= umbralRojo) return { clase: 'bg-rojo/10 text-rojo', valor: cantidad };
+  if (cantidad <= umbralAmarillo) return { clase: 'bg-amarillo/10 text-amarillo', valor: cantidad };
   return { clase: 'bg-verde/10 text-verde', valor: cantidad };
 }
 
@@ -546,8 +558,12 @@ function saludoSegunHora() {
 }
 
 async function vistaInicio() {
+  await cargarUmbrales();
   const mensaje = MENSAJES_BIENVENIDA[Math.floor(Math.random() * MENSAJES_BIENVENIDA.length)];
   const esAdmin = usuarioActual.rol === 'admin';
+
+  const { data: stock } = await supabase.from('stock_global').select('*').order('sabor');
+  const enAmarillo = (stock || []).filter((i) => i.total > umbralRojo && i.total <= umbralAmarillo);
 
   const accesos = [
     { clave: 'diario', etiqueta: 'Diario', emoji: '📒' },
@@ -563,15 +579,26 @@ async function vistaInicio() {
       <p class="mt-4 text-lg font-medium text-marca">${saludoSegunHora()}, ${usuarioActual.nombre}</p>
       <p class="mt-1 text-sm text-neutral-500">${mensaje}</p>
     </div>
+
+    ${enAmarillo.length ? `
+    <div class="mx-6 mb-4 rounded-xl border border-amarillo/30 bg-amarillo/10 p-3">
+      <p class="mb-2 flex items-center gap-1 text-xs font-medium text-amarillo">🟡 Existencias por reponer pronto</p>
+      ${enAmarillo.map((i) => `
+        <div class="flex items-center justify-between py-1 text-xs text-neutral-700">
+          <span>${i.sabor} <span class="text-neutral-400">· ${i.tipo}</span></span>
+          <span class="font-medium text-amarillo">${i.total}</span>
+        </div>`).join('')}
+    </div>` : ''}
+
     <p class="px-6 pb-2 text-xs font-medium text-neutral-400">¿Por dónde quieres empezar?</p>
     <div class="grid grid-cols-2 gap-3 px-6">
       ${accesos.map((a) => `
-        <button data-ir="${a.clave}" class="btn-acceso-inicio flex flex-col items-center gap-2 rounded-2xl border-2 border-black py-6 text-sm font-medium text-neutral-700 active:bg-marca-light">
+        <button data-ir="${a.clave}" class="btn-acceso-inicio flex flex-col items-center gap-2 rounded-2xl border-4 border-black py-6 text-sm font-medium text-neutral-700 active:bg-marca-light">
           <span class="text-2xl">${a.emoji}</span>
           ${a.etiqueta}
         </button>`).join('')}
       ${esAdmin ? `
-        <button data-ir="configuracion" class="btn-acceso-inicio flex flex-col items-center gap-2 rounded-2xl border-2 border-black py-6 text-sm font-medium text-neutral-700 active:bg-marca-light">
+        <button data-ir="configuracion" class="btn-acceso-inicio flex flex-col items-center gap-2 rounded-2xl border-4 border-black py-6 text-sm font-medium text-neutral-700 active:bg-marca-light">
           <span class="text-2xl">⚙️</span>
           Configuración
         </button>` : ''}
@@ -1796,6 +1823,7 @@ let modoResumen = 'congelados';
 
 async function vistaResumen() {
   if (modoResumen === 'fruteria') return vistaResumenFruteria();
+  await cargarUmbrales();
 
   const { data: movimientos } = await supabase.from('diario_movimientos').select('sabor, tipo, cantidad, responsable').eq('semana_inicio', semanaActual());
   const filas = movimientos || [];
@@ -1925,8 +1953,8 @@ async function compartirResumenTexto(porSabor, totalEntradas, totalSalidas) {
 
   function emojiEstado(total) {
     if (total < 0) return '🟣'; // negativo / rojo flúor
-    if (total <= 5) return '🔴';
-    if (total <= 8) return '🟡';
+    if (total <= umbralRojo) return '🔴';
+    if (total <= umbralAmarillo) return '🟡';
     return '🟢';
   }
 
@@ -1970,6 +1998,7 @@ const LAMINAS = {
 };
 
 async function vistaGlobal() {
+  await cargarUmbrales();
   const { data: stock } = await supabase.from('stock_global').select('*').order('sabor');
   const items = stock || [];
 
@@ -2038,9 +2067,9 @@ async function vistaGlobal() {
 
     ${!['produccion', 'fruteria'].includes(laminaActual) ? `
     <div class="flex gap-3 px-4 py-2">
-      <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-verde"></span>9+</span>
-      <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-amarillo"></span>6-8</span>
-      <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-rojo"></span>0-5</span>
+      <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-verde"></span>${umbralAmarillo + 1}+</span>
+      <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-amarillo"></span>${umbralRojo + 1}-${umbralAmarillo}</span>
+      <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-rojo"></span>0-${umbralRojo}</span>
       <span class="flex items-center gap-1 text-[10.5px] text-neutral-500"><span class="h-2 w-2 rounded-full bg-rojoFluor"></span>neg.</span>
     </div>` : ''}
 
@@ -2079,7 +2108,7 @@ async function vistaGlobal() {
     cont.innerHTML = lotesProduccion.length ? lotesProduccion.map((l) => {
       const totalBloques = [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].reduce((a, b) => a + (b || 0), 0);
       const est = estadoStock(totalBloques);
-      const colorBarra = totalBloques < 0 ? '#FF1744' : totalBloques <= 5 ? '#E24B4A' : totalBloques <= 8 ? '#EF9F27' : '#1D9E75';
+      const colorBarra = totalBloques < 0 ? '#FF1744' : totalBloques <= umbralRojo ? '#E24B4A' : totalBloques <= umbralAmarillo ? '#EF9F27' : '#1D9E75';
       const fecha = new Date(l.fecha_ingreso).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
       return `
         <div class="flex items-center gap-3 border-b border-neutral-100 px-2 py-2">
@@ -2106,7 +2135,7 @@ async function vistaGlobal() {
   const puedeEditar = puedeEscribir('diario');
   cont.innerHTML = filtrados.length ? filtrados.map((item) => {
     const est = estadoStock(item.total);
-    const colorBarra = item.total < 0 ? '#FF1744' : item.total <= 5 ? '#E24B4A' : item.total <= 8 ? '#EF9F27' : '#1D9E75';
+    const colorBarra = item.total < 0 ? '#FF1744' : item.total <= umbralRojo ? '#E24B4A' : item.total <= umbralAmarillo ? '#EF9F27' : '#1D9E75';
     return `
       <div class="flex items-center gap-3 border-b border-neutral-100 px-2 py-2">
         <span class="h-full w-1 self-stretch rounded" style="background-color:${colorBarra}"></span>
@@ -2192,9 +2221,9 @@ function construirHtmlReporte(items, fecha, certificadoPor) {
         <p style="color:#888;font-size:12px;margin-top:0">Existencias globales — generado el ${fecha} por ${usuarioActual.nombre}</p>
         ${certificadoPor ? `<p style="color:#1D9E75;font-weight:600;font-size:12px">✅ Certificado por ${certificadoPor}</p>` : ''}
         <div style="display:flex;gap:14px;margin-top:14px;font-size:11px;color:#555">
-          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#1D9E75"></span>9 o más</span>
-          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#EF9F27"></span>6 a 8</span>
-          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#E24B4A"></span>0 a 5</span>
+          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#1D9E75"></span>${umbralAmarillo + 1} o más</span>
+          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#EF9F27"></span>${umbralRojo + 1} a ${umbralAmarillo}</span>
+          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#E24B4A"></span>0 a ${umbralRojo}</span>
           <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#FF1744"></span>Negativo</span>
         </div>
         <table style="width:100%;border-collapse:separate;border-spacing:0 4px;margin-top:16px">
@@ -2233,8 +2262,8 @@ async function capturarPantallaExistencias(items, certificadoPor = null) {
 
 function colorPdfPorCantidad(total) {
   if (total < 0) return { bg: '#FF1744', color: '#ffffff' };
-  if (total <= 5) return { bg: '#E24B4A', color: '#ffffff' };
-  if (total <= 8) return { bg: '#EF9F27', color: '#ffffff' };
+  if (total <= umbralRojo) return { bg: '#E24B4A', color: '#ffffff' };
+  if (total <= umbralAmarillo) return { bg: '#EF9F27', color: '#ffffff' };
   return { bg: '#1D9E75', color: '#ffffff' };
 }
 
@@ -2280,6 +2309,7 @@ async function vistaConfiguracion() {
 
     const { data: config } = await supabase.from('configuracion_temporada').select('meta_produccion').eq('id', 1).maybeSingle();
     metaProduccionActual = config?.meta_produccion || 400;
+    await cargarUmbrales();
 
     const { data: cert } = await supabase.from('certificaciones_semanales').select('*').eq('semana_inicio', semanaActual()).maybeSingle();
     certificacionActual = cert;
@@ -2328,8 +2358,23 @@ async function vistaConfiguracion() {
 
       <div>
         <p class="mb-1 text-sm font-medium">Rangos de alerta de stock</p>
-        <p class="mb-3 text-[11px] text-neutral-400">Verde: 9+ · Amarillo: 6-8 · Rojo: 0-5 · Rojo flúor: negativos.</p>
-        <p class="text-[11px] text-neutral-400">La edición de estos rangos está disponible en la versión Next.js del proyecto.</p>
+        <p class="mb-3 text-[11px] text-neutral-400">Define desde qué cantidad se considera rojo, amarillo o verde.</p>
+        <form id="form-umbrales" class="flex flex-col gap-3">
+          <div class="flex items-center gap-2">
+            <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-rojo"></span>
+            <label class="flex-1 text-xs text-neutral-600">Rojo: de 0 hasta</label>
+            <input id="campo-umbral-rojo" type="number" min="0" value="${umbralRojo}" class="w-20" />
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-amarillo"></span>
+            <label class="flex-1 text-xs text-neutral-600">Amarillo: hasta</label>
+            <input id="campo-umbral-amarillo" type="number" min="0" value="${umbralAmarillo}" class="w-20" />
+          </div>
+          <p class="text-[10.5px] text-neutral-400">Verde: todo lo que supere el amarillo · Rojo flúor: cualquier cantidad negativa.</p>
+          <p id="error-umbrales" class="hidden text-xs text-rojo"></p>
+          <button type="submit" class="h-9 w-fit rounded-lg bg-marca px-4 text-xs font-medium text-white">Guardar rangos</button>
+        </form>
+        <p id="msg-umbrales" class="hidden text-xs text-verde mt-1">Rangos guardados.</p>
       </div>
 
       <div>
@@ -2396,6 +2441,35 @@ async function vistaConfiguracion() {
     const { error } = await supabase.from('configuracion_temporada').update({ meta_produccion: valor }).eq('id', 1);
     if (error) return alert('No se pudo guardar: ' + error.message);
     const msg = document.getElementById('msg-meta-produccion');
+    msg.classList.remove('hidden');
+    setTimeout(() => msg.classList.add('hidden'), 2000);
+  });
+
+  document.getElementById('form-umbrales')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorEl = document.getElementById('error-umbrales');
+    errorEl.classList.add('hidden');
+    const rojo = Number(document.getElementById('campo-umbral-rojo').value);
+    const amarillo = Number(document.getElementById('campo-umbral-amarillo').value);
+    if (Number.isNaN(rojo) || Number.isNaN(amarillo) || rojo < 0 || amarillo < 0) {
+      errorEl.textContent = 'Ingresa números válidos.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+    if (amarillo <= rojo) {
+      errorEl.textContent = 'El umbral amarillo debe ser mayor que el rojo.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+    const { error } = await supabase.from('configuracion_temporada').update({ umbral_rojo: rojo, umbral_amarillo: amarillo }).eq('id', 1);
+    if (error) {
+      errorEl.textContent = 'No se pudo guardar: ' + error.message;
+      errorEl.classList.remove('hidden');
+      return;
+    }
+    umbralRojo = rojo;
+    umbralAmarillo = amarillo;
+    const msg = document.getElementById('msg-umbrales');
     msg.classList.remove('hidden');
     setTimeout(() => msg.classList.add('hidden'), 2000);
   });
