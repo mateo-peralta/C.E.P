@@ -204,7 +204,7 @@ function puedeEscribir(area) {
   const permisos = {
     diario: ['admin', 'bodega', 'produccion'],
     produccion: ['admin', 'produccion'],
-    compras: ['admin', 'bodega', 'produccion']
+    compras: ['admin']
   };
   const permitidos = permisos[area];
   return permitidos ? permitidos.includes(usuarioActual.rol) : true;
