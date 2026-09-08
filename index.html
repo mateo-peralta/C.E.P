@@ -537,6 +537,7 @@ async function renderPantalla() {
   else if (pantalla === 'global') await vistaGlobal();
   else if (pantalla === 'configuracion') await vistaConfiguracion();
   else if (pantalla === 'usuarios') await vistaUsuarios();
+  else if (pantalla === 'informe_mensual') await vistaInformeMensual();
 }
 
 // ---------------- Inicio ----------------
@@ -2047,6 +2048,13 @@ async function vistaGlobal() {
       ${mapaPrecios.size === 0 ? `<p class="text-[10px] text-neutral-500 mt-1">Aún no hay precios cargados — agrégalos en Configuración.</p>` : ''}
     </div>` : ''}
 
+    <div class="px-4 pt-3">
+      <button id="btn-ir-informe-mensual" class="flex w-full items-center justify-between rounded-xl border border-neutral-200 px-3 py-2.5 text-left">
+        <span class="text-sm font-medium">📅 Informe mensual</span>
+        <span class="text-neutral-400">→</span>
+      </button>
+    </div>
+
     <div class="flex gap-2 overflow-x-auto px-4 pt-3">
       ${Object.entries(LAMINAS).map(([clave, l]) => `<button data-lamina="${clave}" class="whitespace-nowrap rounded-full px-3 py-1.5 text-xs ${laminaActual === clave ? 'bg-marca text-white' : 'border border-neutral-200 text-neutral-500'}">${l.etiqueta}</button>`).join('')}
     </div>
@@ -2086,6 +2094,7 @@ async function vistaGlobal() {
   `);
   montarShell();
 
+  document.getElementById('btn-ir-informe-mensual')?.addEventListener('click', () => cambiarPantalla('informe_mensual'));
   document.querySelectorAll('[data-lamina]').forEach((btn) => {
     btn.addEventListener('click', () => { laminaActual = btn.dataset.lamina; vistaGlobal(); });
   });
@@ -2278,6 +2287,185 @@ function descargarPdfExistencias(items, certificadoPor = null) {
       @media print { body{padding:12px} }
     </style></head>
     <body>${construirHtmlReporte(items, fecha, certificadoPor)}</body></html>
+  `);
+  ventana.document.close();
+  ventana.focus();
+  setTimeout(() => ventana.print(), 300);
+}
+
+// ---------------- Informe mensual ----------------
+
+const MESES_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+const OFFSET_DIA_SEMANA = { LUNES: 0, MARTES: 1, MIERCOLES: 2, JUEVES: 3, VIERNES: 4, SABADO: 5, DOMINGO: 6 };
+
+function etiquetaMes(mesStr) {
+  const [anio, mes] = mesStr.split('-').map(Number);
+  const nombre = MESES_ES[mes - 1];
+  return `${nombre.charAt(0).toUpperCase()}${nombre.slice(1)} ${anio}`;
+}
+
+let mesInformeSeleccionado = null;
+
+async function vistaInformeMensual() {
+  const hoy = new Date();
+  const mesActualStr = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`;
+  if (!mesInformeSeleccionado) mesInformeSeleccionado = mesActualStr;
+
+  const [anio, mes] = mesInformeSeleccionado.split('-').map(Number);
+  const inicioMes = `${anio}-${String(mes).padStart(2, '0')}-01`;
+  const finMesDate = new Date(anio, mes, 0);
+  const finMesStr = finMesDate.toISOString().slice(0, 10);
+  const inicioMesSiguiente = new Date(anio, mes, 1).toISOString().slice(0, 10);
+
+  const { data: movimientos } = await supabase.from('diario_movimientos')
+    .select('sabor, tipo, cantidad, fecha')
+    .gte('fecha', inicioMes).lt('fecha', inicioMesSiguiente);
+  const filasDiario = movimientos || [];
+
+  const inicioBusquedaCompras = new Date(anio, mes - 1, 1);
+  inicioBusquedaCompras.setDate(inicioBusquedaCompras.getDate() - 6);
+  const { data: comprasRaw } = await supabase.from('compras_semanales')
+    .select('producto, formato, cantidad, dia_semana, semana_inicio, precio_unitario')
+    .gte('semana_inicio', inicioBusquedaCompras.toISOString().slice(0, 10))
+    .lte('semana_inicio', finMesStr);
+
+  const inicioMesDate = new Date(inicioMes + 'T00:00:00');
+  const finMesLimite = new Date(finMesStr + 'T23:59:59');
+  const comprasDelMes = (comprasRaw || []).filter((c) => {
+    const d = new Date(c.semana_inicio + 'T00:00:00');
+    d.setDate(d.getDate() + (OFFSET_DIA_SEMANA[c.dia_semana] ?? 0));
+    return d >= inicioMesDate && d <= finMesLimite;
+  });
+
+  const puedeVerValor = usuarioActual.rol === 'admin' || usuarioActual.rol === 'jefe';
+  const formatoCLP = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(n);
+
+  const totalEntradas = filasDiario.filter((f) => f.cantidad > 0).reduce((a, f) => a + f.cantidad, 0);
+  const totalSalidas = filasDiario.filter((f) => f.cantidad < 0).reduce((a, f) => a + Math.abs(f.cantidad), 0);
+
+  const mapaDiario = new Map();
+  filasDiario.forEach((f) => {
+    const clave = `${f.sabor}|${f.tipo}`;
+    if (!mapaDiario.has(clave)) mapaDiario.set(clave, { sabor: f.sabor, tipo: f.tipo, entradas: 0, salidas: 0 });
+    const e = mapaDiario.get(clave);
+    if (f.cantidad > 0) e.entradas += f.cantidad; else e.salidas += Math.abs(f.cantidad);
+  });
+  const filasDiarioAgg = [...mapaDiario.values()].sort((a, b) => a.sabor.localeCompare(b.sabor));
+
+  const totalFruteriaUnidades = comprasDelMes.reduce((a, c) => a + Number(c.cantidad), 0);
+  const totalGastoFruteria = comprasDelMes.reduce((a, c) => a + (c.precio_unitario ? Number(c.cantidad) * Number(c.precio_unitario) : 0), 0);
+
+  const mapaFruteria = new Map();
+  comprasDelMes.forEach((c) => {
+    const clave = `${c.producto}|${c.formato}`;
+    if (!mapaFruteria.has(clave)) mapaFruteria.set(clave, { producto: c.producto, formato: c.formato, cantidad: 0, gasto: 0 });
+    const e = mapaFruteria.get(clave);
+    e.cantidad += Number(c.cantidad);
+    if (c.precio_unitario) e.gasto += Number(c.cantidad) * Number(c.precio_unitario);
+  });
+  const filasFruteriaAgg = [...mapaFruteria.values()].sort((a, b) => a.producto.localeCompare(b.producto));
+
+  app.innerHTML = shell('Informe mensual', `
+    <div class="px-4 pt-3">
+      <input id="selector-mes-informe" type="month" value="${mesInformeSeleccionado}" max="${mesActualStr}" />
+    </div>
+    <p class="px-4 pt-3 text-sm font-medium text-marca">${etiquetaMes(mesInformeSeleccionado)}</p>
+
+    <div class="grid grid-cols-2 gap-2 px-4 pt-3">
+      <div class="rounded-lg bg-neutral-50 p-2.5"><p class="text-[11px] text-neutral-500">Entradas (congelados)</p><p class="text-xl font-medium">${totalEntradas}</p></div>
+      <div class="rounded-lg bg-neutral-50 p-2.5"><p class="text-[11px] text-neutral-500">Salidas (congelados)</p><p class="text-xl font-medium">${totalSalidas}</p></div>
+    </div>
+    <div class="grid grid-cols-2 gap-2 px-4 pt-2">
+      <div class="rounded-lg bg-neutral-50 p-2.5"><p class="text-[11px] text-neutral-500">Unidades Frutería</p><p class="text-xl font-medium">${totalFruteriaUnidades}</p></div>
+      ${puedeVerValor ? `<div class="rounded-lg bg-marca-light p-2.5"><p class="text-[11px] text-marca">Gasto Frutería (aprox.)</p><p class="text-xl font-medium text-marca">${formatoCLP(totalGastoFruteria)}</p></div>` : ''}
+    </div>
+
+    <div class="px-4 pt-3">
+      <button id="btn-descargar-informe-mensual" class="h-9 w-full rounded-lg border border-neutral-300 text-xs font-medium text-neutral-600">⬇ Descargar PDF</button>
+    </div>
+
+    <p class="px-4 pt-4 text-xs font-medium text-neutral-500">❄️ Diario — por sabor</p>
+    <div class="px-2 py-2 overflow-x-auto">
+      ${filasDiarioAgg.length ? `
+      <table class="w-full text-xs">
+        <thead><tr class="text-left text-neutral-400"><th class="px-2 py-1">Sabor</th><th class="px-2 py-1">Tipo</th><th class="px-2 py-1 text-right">Entradas</th><th class="px-2 py-1 text-right">Salidas</th></tr></thead>
+        <tbody>
+          ${filasDiarioAgg.map((f) => `<tr class="border-t border-neutral-100"><td class="px-2 py-1.5 font-medium">${f.sabor}</td><td class="px-2 py-1.5 text-neutral-500">${f.tipo}</td><td class="px-2 py-1.5 text-right text-verde">+${f.entradas}</td><td class="px-2 py-1.5 text-right text-rojo">-${f.salidas}</td></tr>`).join('')}
+        </tbody>
+      </table>` : `<p class="px-2 py-6 text-center text-sm text-neutral-400">Sin movimientos este mes.</p>`}
+    </div>
+
+    <p class="px-4 pt-4 text-xs font-medium text-neutral-500">🍓 Frutería — por producto</p>
+    <div class="px-2 py-2 pb-6 overflow-x-auto">
+      ${filasFruteriaAgg.length ? `
+      <table class="w-full text-xs">
+        <thead><tr class="text-left text-neutral-400"><th class="px-2 py-1">Producto</th><th class="px-2 py-1 text-right">Cantidad</th>${puedeVerValor ? '<th class="px-2 py-1 text-right">Gasto</th>' : ''}</tr></thead>
+        <tbody>
+          ${filasFruteriaAgg.map((f) => `<tr class="border-t border-neutral-100"><td class="px-2 py-1.5 font-medium">${f.producto}</td><td class="px-2 py-1.5 text-right">${f.cantidad} ${f.formato}</td>${puedeVerValor ? `<td class="px-2 py-1.5 text-right">${f.gasto ? formatoCLP(f.gasto) : '—'}</td>` : ''}</tr>`).join('')}
+        </tbody>
+      </table>` : `<p class="px-2 py-6 text-center text-sm text-neutral-400">Sin compras este mes.</p>`}
+    </div>
+  `);
+  montarShell();
+
+  document.getElementById('selector-mes-informe').addEventListener('change', (e) => {
+    mesInformeSeleccionado = e.target.value;
+    vistaInformeMensual();
+  });
+
+  document.getElementById('btn-descargar-informe-mensual').addEventListener('click', () => {
+    descargarPdfInformeMensual({
+      etiquetaMes: etiquetaMes(mesInformeSeleccionado),
+      totalEntradas, totalSalidas, totalFruteriaUnidades, totalGastoFruteria,
+      filasDiarioAgg, filasFruteriaAgg, puedeVerValor
+    });
+  });
+}
+
+function construirHtmlInformeMensual(d) {
+  const formatoCLP = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(n);
+  const filasDiarioHtml = d.filasDiarioAgg.map((f) => `
+    <tr><td style="padding:6px;font-weight:600">${f.sabor}</td><td style="padding:6px">${f.tipo}</td>
+      <td style="padding:6px;text-align:right;color:#1D9E75">+${f.entradas}</td>
+      <td style="padding:6px;text-align:right;color:#E24B4A">-${f.salidas}</td></tr>`).join('')
+    || `<tr><td colspan="4" style="padding:10px;text-align:center;color:#999">Sin movimientos</td></tr>`;
+
+  const filasFruteriaHtml = d.filasFruteriaAgg.map((f) => `
+    <tr><td style="padding:6px;font-weight:600">${f.producto}</td>
+      <td style="padding:6px;text-align:right">${f.cantidad} ${f.formato}</td>
+      ${d.puedeVerValor ? `<td style="padding:6px;text-align:right">${f.gasto ? formatoCLP(f.gasto) : '—'}</td>` : ''}</tr>`).join('')
+    || `<tr><td colspan="${d.puedeVerValor ? 3 : 2}" style="padding:10px;text-align:center;color:#999">Sin compras</td></tr>`;
+
+  return `
+    <h1 style="color:#8B3A5C;font-size:18px;margin-bottom:2px">Control de Existencias y Producciones</h1>
+    <p style="color:#888;font-size:12px;margin-top:0">Informe mensual — ${d.etiquetaMes} · generado por ${usuarioActual.nombre}</p>
+    <div style="display:flex;gap:14px;margin:14px 0;">
+      <div style="flex:1;background:#f5f5f5;border-radius:8px;padding:10px"><p style="font-size:11px;color:#888;margin:0">Entradas</p><p style="font-size:18px;font-weight:700;margin:2px 0 0">${d.totalEntradas}</p></div>
+      <div style="flex:1;background:#f5f5f5;border-radius:8px;padding:10px"><p style="font-size:11px;color:#888;margin:0">Salidas</p><p style="font-size:18px;font-weight:700;margin:2px 0 0">${d.totalSalidas}</p></div>
+      <div style="flex:1;background:#f5f5f5;border-radius:8px;padding:10px"><p style="font-size:11px;color:#888;margin:0">Unid. Frutería</p><p style="font-size:18px;font-weight:700;margin:2px 0 0">${d.totalFruteriaUnidades}</p></div>
+      ${d.puedeVerValor ? `<div style="flex:1;background:#F4E8ED;border-radius:8px;padding:10px"><p style="font-size:11px;color:#8B3A5C;margin:0">Gasto Frutería</p><p style="font-size:18px;font-weight:700;margin:2px 0 0;color:#8B3A5C">${formatoCLP(d.totalGastoFruteria)}</p></div>` : ''}
+    </div>
+    <h3 style="color:#8B3A5C;font-size:13px;margin:16px 0 6px">❄️ Diario — por sabor</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="border-bottom:2px solid #ddd;color:#888"><th style="text-align:left;padding:6px">Sabor</th><th style="text-align:left;padding:6px">Tipo</th><th style="text-align:right;padding:6px">Entradas</th><th style="text-align:right;padding:6px">Salidas</th></tr></thead>
+      <tbody>${filasDiarioHtml}</tbody>
+    </table>
+    <h3 style="color:#8B3A5C;font-size:13px;margin:20px 0 6px">🍓 Frutería — por producto</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="border-bottom:2px solid #ddd;color:#888"><th style="text-align:left;padding:6px">Producto</th><th style="text-align:right;padding:6px">Cantidad</th>${d.puedeVerValor ? '<th style="text-align:right;padding:6px">Gasto</th>' : ''}</tr></thead>
+      <tbody>${filasFruteriaHtml}</tbody>
+    </table>`;
+}
+
+function descargarPdfInformeMensual(datos) {
+  const ventana = window.open('', '_blank');
+  ventana.document.write(`
+    <html><head><title>Informe mensual — ${datos.etiquetaMes}</title>
+    <style>
+      body{font-family:Arial,sans-serif;padding:24px;color:#222}
+      @media print { body{padding:12px} }
+    </style></head>
+    <body>${construirHtmlInformeMensual(datos)}</body></html>
   `);
   ventana.document.close();
   ventana.focus();
