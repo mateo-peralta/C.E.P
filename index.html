@@ -139,14 +139,32 @@ async function validarVentanaDeTurno() {
   if (!usuarioActual?.requiere_cierre_turno) return { permitido: true };
 
   const diasSemana = ['DOMINGO', 'LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO'];
-  const hoy = new Date();
-  const diaHoy = diasSemana[hoy.getDay()];
+  const ahora = new Date();
+  const horaActual = ahora.toTimeString().slice(0, 5); // "HH:MM"
+  const diaHoy = diasSemana[ahora.getDay()];
 
   if ((usuarioActual.dias_libres || []).includes(diaHoy)) {
     return { permitido: false, razon: `Hoy (${diaHoy.toLowerCase()}) es tu día libre.` };
   }
 
-  const semanaInicio = obtenerLunesDeLaSemana(hoy);
+  // 1) ¿Sigue dentro de un turno de AYER que cruzó la medianoche? (ej. entrada 20:00, salida 02:00)
+  const ayer = new Date(ahora);
+  ayer.setDate(ayer.getDate() - 1);
+  const diaAyer = diasSemana[ayer.getDay()];
+  const { data: filaAyer } = await supabase
+    .from('personal_horarios')
+    .select('*')
+    .eq('nombre_persona', usuarioActual.nombre)
+    .eq('semana_inicio', obtenerLunesDeLaSemana(ayer))
+    .eq('dia_semana', diaAyer)
+    .maybeSingle();
+
+  if (filaAyer?.cruza_medianoche && filaAyer.hora_salida && horaActual <= filaAyer.hora_salida.slice(0, 5)) {
+    return { permitido: true, horaSalida: filaAyer.hora_salida };
+  }
+
+  // 2) Turno de HOY
+  const semanaInicio = obtenerLunesDeLaSemana(ahora);
   const { data: fila } = await supabase
     .from('personal_horarios')
     .select('*')
@@ -158,7 +176,18 @@ async function validarVentanaDeTurno() {
   if (!fila || !fila.hora_salida) {
     return { permitido: false, razon: 'No tienes turno asignado hoy.' };
   }
-  return { permitido: true, horaSalida: fila.hora_salida };
+
+  const horaEntrada = fila.hora_entrada ? fila.hora_entrada.slice(0, 5) : null;
+  const horaSalida = fila.hora_salida.slice(0, 5);
+
+  if (horaEntrada && horaActual < horaEntrada) {
+    return { permitido: false, razon: `Tu turno de hoy comienza a las ${horaEntrada}.` };
+  }
+  if (!fila.cruza_medianoche && horaActual > horaSalida) {
+    return { permitido: false, razon: `Tu turno de hoy terminó a las ${horaSalida}.` };
+  }
+
+  return { permitido: true, horaSalida };
 }
 
 // ---------------- Utilidades ----------------
@@ -210,6 +239,28 @@ function puedeEscribir(area) {
   return permitidos ? permitidos.includes(usuarioActual.rol) : true;
 }
 
+let intervaloTurno = null;
+
+/** Revisa cada minuto si el turno sigue vigente, incluso a mitad de sesión (no solo al cargar pantalla). */
+function iniciarMonitoreoTurno() {
+  if (intervaloTurno || !usuarioActual?.requiere_cierre_turno) return;
+  intervaloTurno = setInterval(async () => {
+    const turno = await validarVentanaDeTurno();
+    if (!turno.permitido) {
+      detenerMonitoreoTurno();
+      app.innerHTML = vistaBloqueadaPorTurno(turno.razon);
+      montarBloqueoTurno();
+    }
+  }, 60000);
+}
+
+function detenerMonitoreoTurno() {
+  if (intervaloTurno) {
+    clearInterval(intervaloTurno);
+    intervaloTurno = null;
+  }
+}
+
 // ---------------- Render raíz ----------------
 
 async function render() {
@@ -230,10 +281,12 @@ async function render() {
     } else {
       const turno = await validarVentanaDeTurno();
       if (!turno.permitido) {
+        detenerMonitoreoTurno();
         app.innerHTML = vistaBloqueadaPorTurno(turno.razon);
         montarBloqueoTurno();
       } else {
         await renderPantalla();
+        iniciarMonitoreoTurno();
       }
     }
   }
@@ -263,6 +316,7 @@ function vistaSinPerfil(solicitud) {
 
 function montarSinPerfil() {
   document.getElementById('btn-logout-sin-perfil').addEventListener('click', async () => {
+    detenerMonitoreoTurno();
     await supabase.auth.signOut();
     usuarioActual = null;
     await render();
@@ -281,6 +335,7 @@ function vistaBloqueadaPorTurno(razon) {
 
 function montarBloqueoTurno() {
   document.getElementById('btn-logout-bloqueo').addEventListener('click', async () => {
+    detenerMonitoreoTurno();
     await supabase.auth.signOut();
     usuarioActual = null;
     await render();
@@ -506,6 +561,7 @@ function montarShell() {
   document.getElementById('btn-atras')?.addEventListener('click', irAtras);
   document.getElementById('btn-ir-inicio')?.addEventListener('click', () => cambiarPantalla('inicio'));
   document.getElementById('btn-logout')?.addEventListener('click', async () => {
+    detenerMonitoreoTurno();
     await supabase.auth.signOut();
     usuarioActual = null;
     await render();
