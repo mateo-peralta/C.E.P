@@ -2545,11 +2545,8 @@ async function vistaConfiguracion() {
   let certificacionActual = null;
   let metaProduccionActual = 400;
   if (esAdmin) {
-    const { data: stock } = await supabase.from('stock_global').select('sabor').order('sabor');
-    const { data: precios } = await supabase.from('precios_sabores').select('*');
-    const mapaPrecios = new Map((precios || []).map((p) => [p.sabor.trim().toUpperCase(), p.precio]));
-    const saboresUnicos = [...new Set((stock || []).map((s) => s.sabor))];
-    saboresConPrecio = saboresUnicos.map((s) => ({ sabor: s, precio: mapaPrecios.get(s.trim().toUpperCase()) || '' }));
+    const { data: precios } = await supabase.from('precios_sabores').select('*').order('sabor');
+    saboresConPrecio = (precios || []).map((p) => ({ sabor: p.sabor, precio: p.precio }));
 
     const { data: config } = await supabase.from('configuracion_temporada').select('meta_produccion').eq('id', 1).maybeSingle();
     metaProduccionActual = config?.meta_produccion || 400;
@@ -2631,19 +2628,27 @@ async function vistaConfiguracion() {
 
         <div class="my-3 flex items-center gap-2">
           <div class="h-px flex-1 bg-neutral-100"></div>
-          <span class="text-[10.5px] text-neutral-400">o edítalos a mano</span>
+          <span class="text-[10.5px] text-neutral-400">o edítalos uno por uno</span>
           <div class="h-px flex-1 bg-neutral-100"></div>
         </div>
 
-        <form id="form-precios" class="flex flex-col gap-2">
-          ${saboresConPrecio.map((s) => `
-            <div class="flex items-center gap-2">
+        <div class="flex flex-col gap-2">
+          ${saboresConPrecio.length ? saboresConPrecio.map((s) => `
+            <div class="flex items-center gap-2" data-fila-precio="${s.sabor}">
               <span class="flex-1 text-xs">${s.sabor}</span>
-              <input type="number" name="precio-${s.sabor}" value="${s.precio}" placeholder="$" class="w-28" />
-            </div>`).join('')}
-          <p id="msg-precios" class="hidden text-xs text-verde mt-1">Precios guardados.</p>
-          <button type="submit" class="mt-2 h-9 rounded-lg bg-marca text-xs font-medium text-white">Guardar precios</button>
-        </form>
+              <input type="text" inputmode="decimal" data-input-precio value="${s.precio}" placeholder="$" class="w-24" />
+              <button type="button" data-guardar-precio="${s.sabor}" class="btn-guardar-precio h-9 rounded-lg bg-marca px-3 text-xs font-medium text-white">Guardar</button>
+              <button type="button" data-eliminar-precio="${s.sabor}" class="btn-eliminar-precio h-9 rounded-lg border border-rojo px-2 text-xs font-medium text-rojo">🗑️</button>
+            </div>`).join('') : `<p class="text-xs text-neutral-400">Aún no hay precios cargados.</p>`}
+          <p id="msg-precios" class="hidden text-xs text-verde mt-1">Guardado.</p>
+        </div>
+
+        <div class="mt-3 flex items-center gap-2 border-t border-neutral-100 pt-3">
+          <input id="campo-nuevo-precio-sabor" type="text" placeholder="Nombre del sabor" class="flex-1" />
+          <input id="campo-nuevo-precio-valor" type="text" inputmode="decimal" placeholder="$" class="w-24" />
+          <button type="button" id="btn-agregar-precio" class="h-9 rounded-lg bg-marca px-3 text-xs font-medium text-white">+ Agregar</button>
+        </div>
+        <p id="error-precios" class="hidden text-xs text-rojo mt-1"></p>
       </div>
 
       <div>
@@ -2723,22 +2728,65 @@ async function vistaConfiguracion() {
     if (file) manejarArchivoExcelPrecios(file);
   });
 
-  document.getElementById('form-precios')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const formData = new FormData(e.target);
-    const filas = [];
-    for (const [nombreCampo, valor] of formData.entries()) {
-      if (!nombreCampo.startsWith('precio-') || valor === '') continue;
-      const sabor = nombreCampo.replace('precio-', '');
-      filas.push({ sabor: sabor.toUpperCase(), precio: Number(valor), actualizado_por: usuarioActual.nombre, updated_at: new Date().toISOString() });
-    }
-    if (filas.length === 0) return;
-    const { error } = await supabase.from('precios_sabores').upsert(filas, { onConflict: 'sabor' });
-    const msgEl = document.getElementById('msg-precios');
-    if (!error) {
+  document.querySelectorAll('.btn-guardar-precio').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const sabor = btn.dataset.guardarPrecio;
+      const fila = document.querySelector(`[data-fila-precio="${sabor}"]`);
+      const valorTexto = fila.querySelector('[data-input-precio]').value.replace(',', '.');
+      const precio = Number(valorTexto);
+      const errorEl = document.getElementById('error-precios');
+      errorEl.classList.add('hidden');
+      if (!valorTexto || Number.isNaN(precio)) {
+        errorEl.textContent = 'Escribe un precio válido.';
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      const { error } = await supabase.from('precios_sabores').upsert(
+        [{ sabor, precio, actualizado_por: usuarioActual.nombre, updated_at: new Date().toISOString() }],
+        { onConflict: 'sabor' }
+      );
+      if (error) {
+        errorEl.textContent = 'No se pudo guardar: ' + error.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      const msgEl = document.getElementById('msg-precios');
       msgEl.classList.remove('hidden');
-      setTimeout(() => msgEl.classList.add('hidden'), 2500);
+      setTimeout(() => msgEl.classList.add('hidden'), 2000);
+    });
+  });
+
+  document.querySelectorAll('.btn-eliminar-precio').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const sabor = btn.dataset.eliminarPrecio;
+      if (!window.confirm(`¿Eliminar el precio de ${sabor}?`)) return;
+      const { error } = await supabase.from('precios_sabores').delete().eq('sabor', sabor);
+      if (error) return alert('No se pudo eliminar: ' + error.message);
+      await vistaConfiguracion();
+    });
+  });
+
+  document.getElementById('btn-agregar-precio')?.addEventListener('click', async () => {
+    const errorEl = document.getElementById('error-precios');
+    errorEl.classList.add('hidden');
+    const sabor = normalizarTexto(document.getElementById('campo-nuevo-precio-sabor').value);
+    const valorTexto = document.getElementById('campo-nuevo-precio-valor').value.replace(',', '.');
+    const precio = Number(valorTexto);
+    if (!sabor || !valorTexto || Number.isNaN(precio)) {
+      errorEl.textContent = 'Escribe el nombre del sabor y un precio válido.';
+      errorEl.classList.remove('hidden');
+      return;
     }
+    const { error } = await supabase.from('precios_sabores').upsert(
+      [{ sabor, precio, actualizado_por: usuarioActual.nombre, updated_at: new Date().toISOString() }],
+      { onConflict: 'sabor' }
+    );
+    if (error) {
+      errorEl.textContent = 'No se pudo agregar: ' + error.message;
+      errorEl.classList.remove('hidden');
+      return;
+    }
+    await vistaConfiguracion();
   });
 
   document.getElementById('btn-descertificar')?.addEventListener('click', async () => {
