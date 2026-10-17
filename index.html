@@ -1432,10 +1432,14 @@ async function vistaProduccion() {
   function filaLote(l) {
     const fecha = new Date(l.fecha_ingreso).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
     const bloques = [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].filter(Boolean).join('/');
+    const existe = l.existe !== false;
     return `<div class="flex items-center justify-between border-b border-neutral-100 py-2">
       <div>
-        <p class="text-sm font-medium">${l.sabor} + ${l.complemento} ${l.estado === 'proxima' ? '<span class="ml-1 rounded-full bg-marca-light px-2 py-0.5 text-[10px] text-marca">próxima</span>' : ''}</p>
+        <p class="text-sm font-medium ${existe ? '' : 'line-through opacity-50'}">${l.sabor} + ${l.complemento} ${l.estado === 'proxima' ? '<span class="ml-1 rounded-full bg-marca-light px-2 py-0.5 text-[10px] text-marca">próxima</span>' : ''}</p>
         <p class="text-[11px] text-neutral-400">Bloques: ${bloques} · ${fecha}</p>
+        <label class="mt-1 flex items-center gap-1 text-[11px] text-neutral-500 ${permitido ? 'cursor-pointer' : ''}">
+          <input type="checkbox" class="chk-lote h-4 w-4" data-lote-id="${l.id}" data-campo="existe" ${existe ? 'checked' : ''} ${permitido ? '' : 'disabled'} />Existe
+        </label>
       </div>
       <div class="flex items-center gap-1">
         ${permitido && l.ubicacion === 'SALON' ? `<button data-finalizar-lote="${l.id}" data-lote-sabor="${l.sabor}" data-lote-complemento="${l.complemento}" class="btn-finalizar-lote rounded-full border border-marca px-2 py-1 text-[10px] font-medium text-marca" aria-label="Finalizar y calificar">Finalizar</button>` : ''}
@@ -1485,6 +1489,14 @@ async function vistaProduccion() {
     document.getElementById('btn-en-uso').addEventListener('click', () => document.getElementById('panel-en-uso').classList.toggle('hidden'));
     montarFormularioProduccion();
     montarPanelEnUso(enCamara);
+
+    document.querySelectorAll('.chk-lote').forEach((chk) => {
+      chk.addEventListener('change', async () => {
+        const { error } = await supabase.from('produccion_mezclas').update({ [chk.dataset.campo]: chk.checked }).eq('id', chk.dataset.loteId);
+        if (error) { chk.checked = !chk.checked; return alert('No se pudo guardar: ' + error.message); }
+        await vistaProduccion();
+      });
+    });
 
     document.querySelectorAll('.btn-editar-fecha').forEach((btn) => {
       btn.addEventListener('click', () => {
