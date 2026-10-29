@@ -1444,6 +1444,7 @@ async function vistaProduccion() {
       <div class="flex items-center gap-1">
         ${permitido && l.ubicacion === 'SALON' ? `<button data-finalizar-lote="${l.id}" data-lote-sabor="${l.sabor}" data-lote-complemento="${l.complemento}" class="btn-finalizar-lote rounded-full border border-marca px-2 py-1 text-[10px] font-medium text-marca" aria-label="Finalizar y calificar">Finalizar</button>` : ''}
         ${permitido ? `<button data-editar-fecha-lote="${l.id}" data-fecha-actual="${l.fecha_ingreso}" class="btn-editar-fecha p-1 text-neutral-400" aria-label="Editar fecha">📅</button>` : ''}
+        ${usuarioActual.rol === 'admin' ? `<button data-eliminar-lote="${l.id}" data-lote-nombre="${l.sabor} + ${l.complemento}" class="btn-eliminar-lote p-1 text-red-400" aria-label="Eliminar producción">🗑️</button>` : ''}
       </div>
     </div>`;
   }
@@ -1494,6 +1495,18 @@ async function vistaProduccion() {
       chk.addEventListener('change', async () => {
         const { error } = await supabase.from('produccion_mezclas').update({ [chk.dataset.campo]: chk.checked }).eq('id', chk.dataset.loteId);
         if (error) { chk.checked = !chk.checked; return alert('No se pudo guardar: ' + error.message); }
+        await vistaProduccion();
+      });
+    });
+
+    document.querySelectorAll('.btn-eliminar-lote').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('¿Eliminar la producción "' + btn.dataset.loteNombre + '"? Esto no se puede deshacer y afecta el conteo de existencias.')) return;
+        const id = btn.dataset.eliminarLote;
+        const { error: e1 } = await supabase.from('produccion_movimientos').delete().eq('produccion_id', id);
+        if (e1) return alert('No se pudo eliminar: ' + e1.message);
+        const { error } = await supabase.from('produccion_mezclas').delete().eq('id', id);
+        if (error) return alert('No se pudo eliminar: ' + error.message);
         await vistaProduccion();
       });
     });
