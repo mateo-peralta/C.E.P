@@ -612,7 +612,7 @@ async function renderPantalla() {
 
 // ---------------- Centro de costos ----------------
 
-let pestanaCostos = 'mezclas';
+let pestanaCostos = 'calcular';
 
 function numCosto(v) {
   const n = Number(String(v ?? '').replace(',', '.').trim());
@@ -624,11 +624,13 @@ async function vistaCentroCostos() {
   const clp = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(Math.round(n || 0));
   const clp1 = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 1 }).format(n || 0);
 
-  const [rp, rf, rr, rl] = await Promise.all([
+  const [rp, rf, rr, rl, rs, rpre] = await Promise.all([
     supabase.from('costos_pulpas').select('*').order('nombre'),
     supabase.from('costos_frutas').select('*').order('nombre'),
     supabase.from('costos_recetas').select('*').order('pulpa'),
-    supabase.from('produccion_mezclas').select('*').neq('estado', 'terminado').order('fecha_ingreso')
+    supabase.from('produccion_mezclas').select('*').neq('estado', 'terminado').order('fecha_ingreso'),
+    supabase.from('stock_global').select('*'),
+    supabase.from('precios_sabores').select('*')
   ]);
   const errTablas = rp.error || rf.error || rr.error;
   const pulpas = rp.data || [], frutas = rf.data || [], recetas = rr.data || [], lotes = rl.data || [];
@@ -686,6 +688,61 @@ async function vistaCentroCostos() {
       ${esAdmin ? `<p class="mb-1 mt-3 text-[11px] text-neutral-400">Agregar mezcla</p>` + fila(null, true) : ''}`;
   }
 
+
+  function pulpasSugeridas() {
+    const precios = rpre.data || [];
+    return (rs.data || [])
+      .filter((x) => String(x.tipo).toUpperCase() === 'PULPA' && Number(x.total) > 0)
+      .sort((a, b) => Number(b.total) - Number(a.total))
+      .slice(0, 8)
+      .map((x) => {
+        const cp = pulpaDe(x.sabor);
+        const pr = precios.find((q) => norm(q.sabor) === norm(x.sabor));
+        const precioUnidad = pr ? Number(pr.precio) : (cp ? Number(cp.precio_kg) : 0);
+        return { sabor: x.sabor, stock: Number(x.total), precioUnidad };
+      });
+  }
+
+  function seccionCalcular() {
+    const sug = pulpasSugeridas();
+    const f = (id, t, ph, extra = '') => `<div><p class="mb-0.5 text-[10px] text-neutral-400">${t}</p><input id="${id}" type="text" inputmode="decimal" placeholder="${ph}" class="w-full !h-9 !px-2 text-sm" ${extra} /></div>`;
+    return `
+      <datalist id="lista-calc-frutas">${frutas.map((x) => `<option>${x.nombre}</option>`).join('')}</datalist>
+      <div class="rounded-xl border border-neutral-200 p-3">
+        <p class="mb-2 text-xs font-medium text-neutral-600">1 · La fruta</p>
+        <div class="grid grid-cols-2 gap-2">
+          <div class="col-span-2"><p class="mb-0.5 text-[10px] text-neutral-400">Fruta</p><input id="calc-fruta" type="text" list="lista-calc-frutas" placeholder="ej. Durazno" class="w-full !h-9 !px-2 text-sm" /></div>
+          ${f('calc-precio-kg', 'Valor por kilo ($)', '0')}
+          ${f('calc-unid-kg', '¿Cuántas frutas forman el kilo?', 'ej. 8')}
+          ${f('calc-descarte', 'Gramos de descarte por kilo (cáscara, pepas)', 'ej. 150')}
+          ${f('calc-gramos', 'Gramos de fruta útil por porción', 'ej. 60')}
+        </div>
+        <p id="calc-info-fruta" class="mt-2 text-[11px] text-neutral-500"></p>
+      </div>
+
+      <div class="mt-3 rounded-xl border border-neutral-200 p-3">
+        <p class="mb-2 text-xs font-medium text-neutral-600">2 · La pulpa con que se mezcla</p>
+        <input id="calc-pulpa" type="text" placeholder="Escribe o elige una sugerencia" class="mb-2 w-full !h-9 !px-2 text-sm" />
+        ${sug.length ? `<p class="mb-1 text-[10px] text-neutral-400">Sugeridas: las pulpas con más existencias</p>
+        <div class="flex flex-wrap gap-1.5">
+          ${sug.map((x) => `<button type="button" class="chip-pulpa rounded-lg border border-neutral-200 px-2 py-1.5 text-left text-[11px]" data-sabor="${x.sabor}" data-precio="${x.precioUnidad}">
+            <b>${x.sabor}</b><br><span class="text-neutral-400">${x.stock} en stock · ${x.precioUnidad ? clp(x.precioUnidad) + '/unid.' : 'sin precio'}</span></button>`).join('')}
+        </div>` : '<p class="text-[11px] text-neutral-400">Aún no hay pulpas con existencias registradas.</p>'}
+        <div class="mt-2 grid grid-cols-2 gap-2">
+          ${f('calc-precio-pulpa', 'Valor por unidad de pulpa (1 kilo) ($)', '0')}
+          ${f('calc-porc-kg', 'Porciones por kilo de pulpa', '12', 'value="12"')}
+          ${f('calc-porc-bloque', 'Porciones por bloque', '1', 'value="1"')}
+          ${f('calc-otros', 'Otros costos por porción ($)', '0')}
+        </div>
+      </div>
+
+      <div class="mt-3 rounded-xl border border-marca p-3">
+        <p class="mb-1 text-xs font-medium text-marca">Resultado</p>
+        <div id="calc-resultado" class="text-xs text-neutral-600">Completa los datos para ver el costo.</div>
+        ${esAdmin ? '<button id="btn-guardar-calc" class="mt-3 h-9 w-full rounded-lg bg-marca text-xs font-medium text-white">Guardar fruta, pulpa y mezcla</button>' : ''}
+      </div>`;
+  }
+
   function seccionProducciones() {
     let total = 0, sinReceta = 0;
     const filas = lotes.map((l) => {
@@ -700,8 +757,8 @@ async function vistaCentroCostos() {
     return `<div class="mb-3 rounded-xl border border-neutral-200 p-3"><p class="text-[11px] text-neutral-500">Costo total de lo producido (en cámara y salón)</p><p class="text-xl font-medium text-marca">${clp(total)}</p>${sinReceta ? `<p class="text-[10.5px] text-neutral-400">${sinReceta} lote(s) sin receta: crea la mezcla con la misma pulpa y fruta.</p>` : ''}</div>` + (filas || '<p class="text-xs text-neutral-400">No hay producciones activas.</p>');
   }
 
-  const pestanas = [['mezclas', 'Mezclas'], ['pulpas', 'Pulpas'], ['frutas', 'Frutas'], ['producciones', 'Producidas']];
-  const cuerpo = pestanaCostos === 'pulpas' ? seccionPulpas() : pestanaCostos === 'frutas' ? seccionFrutas() : pestanaCostos === 'producciones' ? seccionProducciones() : seccionMezclas();
+  const pestanas = [['calcular', 'Calcular'], ['mezclas', 'Mezclas'], ['pulpas', 'Pulpas'], ['frutas', 'Frutas'], ['producciones', 'Producidas']];
+  const cuerpo = pestanaCostos === 'calcular' ? seccionCalcular() : pestanaCostos === 'pulpas' ? seccionPulpas() : pestanaCostos === 'frutas' ? seccionFrutas() : pestanaCostos === 'producciones' ? seccionProducciones() : seccionMezclas();
 
   app.innerHTML = shell('Centro de costos', `
     <div class="p-4">
@@ -716,6 +773,59 @@ async function vistaCentroCostos() {
   montarShell();
 
   document.querySelectorAll('.btn-pestana-costos').forEach((b) => b.addEventListener('click', async () => { pestanaCostos = b.dataset.pestana; await vistaCentroCostos(); }));
+
+  if (pestanaCostos === 'calcular') {
+    const g = (id) => document.getElementById(id);
+    const calcular = () => {
+      const precioKg = numCosto(g('calc-precio-kg').value), unid = numCosto(g('calc-unid-kg').value), desc = numCosto(g('calc-descarte').value);
+      const gramos = numCosto(g('calc-gramos').value), precioPulpa = numCosto(g('calc-precio-pulpa').value);
+      const porcKg = numCosto(g('calc-porc-kg').value) || 12, porcBloque = numCosto(g('calc-porc-bloque').value) || 1, otros = numCosto(g('calc-otros').value);
+      const util = Math.max(0, 1000 - desc);
+      const gUnidad = unid > 0 ? util / unid : 0;
+      g('calc-info-fruta').innerHTML = precioKg || unid ? `Útil: <b>${util} g/kg</b> (${(desc / 10).toFixed(1)}% de descarte) · ${gUnidad ? Math.round(gUnidad) + ' g útiles por fruta' : ''} · ${util ? clp1(precioKg / util) + ' por gramo útil' : ''}${unid ? ' · ' + clp(precioKg / unid) + ' por fruta' : ''}` : '';
+      const cFruta = util ? gramos * precioKg / util : 0;
+      const cPulpa = porcKg ? precioPulpa / porcKg : 0;
+      const porcion = cFruta + cPulpa + otros;
+      g('calc-resultado').innerHTML = (precioKg || precioPulpa) ? `
+        Pulpa por porción: <b>${clp1(cPulpa)}</b> · Fruta por porción: <b>${clp1(cFruta)}</b>${gUnidad && gramos ? ` (≈ ${(gramos / gUnidad).toFixed(2)} frutas)` : ''}${otros ? ' · Otros: <b>' + clp1(otros) + '</b>' : ''}
+        <div class="mt-2 grid grid-cols-2 gap-2 text-center">
+          <div class="rounded-lg bg-neutral-100 p-2"><p class="text-[10px] text-neutral-500">Por unidad (porción)</p><p class="text-base font-medium text-marca">${clp1(porcion)}</p></div>
+          <div class="rounded-lg bg-neutral-100 p-2"><p class="text-[10px] text-neutral-500">Por bloque</p><p class="text-base font-medium text-marca">${clp1(porcion * porcBloque)}</p></div>
+        </div>` : 'Completa los datos para ver el costo.';
+    };
+    document.querySelectorAll('#calc-fruta, #calc-precio-kg, #calc-unid-kg, #calc-descarte, #calc-gramos, #calc-pulpa, #calc-precio-pulpa, #calc-porc-kg, #calc-porc-bloque, #calc-otros').forEach((i) => i.addEventListener('input', calcular));
+    g('calc-fruta').addEventListener('change', () => {
+      const fr = frutaDe(g('calc-fruta').value);
+      if (!fr) return;
+      g('calc-precio-kg').value = fr.precio_kg; g('calc-unid-kg').value = fr.unidades_por_kg; g('calc-descarte').value = fr.descarte_g;
+      calcular();
+    });
+    document.querySelectorAll('.chip-pulpa').forEach((b) => b.addEventListener('click', () => {
+      g('calc-pulpa').value = b.dataset.sabor;
+      const cp = pulpaDe(b.dataset.sabor);
+      g('calc-precio-pulpa').value = Number(b.dataset.precio) || cp?.precio_kg || '';
+      if (cp) g('calc-porc-kg').value = cp.porciones_por_kg;
+      calcular();
+    }));
+    g('btn-guardar-calc')?.addEventListener('click', async () => {
+      const fruta = g('calc-fruta').value.trim(), pulpa = g('calc-pulpa').value.trim();
+      if (!pulpa) return alert('Indica con qué pulpa se mezcla.');
+      const ahora = new Date().toISOString();
+      if (fruta) {
+        const { error } = await supabase.from('costos_frutas').upsert([{ nombre: fruta, precio_kg: numCosto(g('calc-precio-kg').value), unidades_por_kg: numCosto(g('calc-unid-kg').value) || 1, descarte_g: numCosto(g('calc-descarte').value), updated_at: ahora }], { onConflict: 'nombre' });
+        if (error) return alert('No se pudo guardar la fruta: ' + error.message);
+      }
+      const { error: e2 } = await supabase.from('costos_pulpas').upsert([{ nombre: pulpa, precio_kg: numCosto(g('calc-precio-pulpa').value), porciones_por_kg: numCosto(g('calc-porc-kg').value) || 12, updated_at: ahora }], { onConflict: 'nombre' });
+      if (e2) return alert('No se pudo guardar la pulpa: ' + e2.message);
+      const receta = { pulpa, fruta: fruta || null, gramos_fruta_porcion: numCosto(g('calc-gramos').value), porciones_por_bloque: numCosto(g('calc-porc-bloque').value) || 1, otros_costos_porcion: numCosto(g('calc-otros').value), updated_at: ahora };
+      const existente = recetas.find((x) => norm(x.pulpa) === norm(pulpa) && norm(x.fruta) === norm(fruta));
+      const { error: e3 } = existente ? await supabase.from('costos_recetas').update(receta).eq('id', existente.id) : await supabase.from('costos_recetas').insert([receta]);
+      if (e3) return alert('No se pudo guardar la mezcla: ' + e3.message);
+      pestanaCostos = 'mezclas';
+      await vistaCentroCostos();
+    });
+  }
+
   if (!esAdmin) return;
 
   const camposNum = { costos_pulpas: ['precio_kg', 'porciones_por_kg'], costos_frutas: ['precio_kg', 'unidades_por_kg', 'descarte_g'], costos_recetas: ['gramos_fruta_porcion', 'porciones_por_bloque', 'otros_costos_porcion'] };
