@@ -544,7 +544,8 @@ function shell(titulo, contenidoHtml) {
         <button id="btn-menu" aria-label="Menú" class="p-1 text-lg leading-none text-neutral-500">☰</button>
         <div id="menu-desplegable" class="absolute right-0 top-full z-40 mt-2 hidden w-52 rounded-xl border border-neutral-200 bg-white py-1 shadow-lg">
           <button data-menu="historial" class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-neutral-700">⭐ Historial de sabores</button>
-          ${(usuarioActual.rol === 'admin' || usuarioActual.rol === 'jefe') ? `<button data-menu="costos" class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-neutral-700">💰 Centro de costos</button>` : ''}
+          ${(usuarioActual.rol === 'admin' || usuarioActual.rol === 'jefe') ? `<button data-menu="costos" class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-neutral-700">💰 Centro de costos</button>
+          <button data-menu="analisis" class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-neutral-700">📊 Análisis de producción</button>` : ''}
         </div>
       </div>
     </header>
@@ -607,12 +608,164 @@ async function renderPantalla() {
   else if (pantalla === 'usuarios') await vistaUsuarios();
   else if (pantalla === 'informe_mensual') await vistaInformeMensual();
   else if (pantalla === 'costos') await vistaCentroCostos();
+  else if (pantalla === 'analisis') await vistaAnalisis();
 }
 
+
+
+// ---------------- Modelo de costos compartido ----------------
+
+const CFG_COSTOS_DEFECTO = { precio_venta_jarra: 4990, tope_costo_pct: 12, porciones_lote: 12, jarras_lote: 14 };
+
+function crearModeloCostos({ pulpas, frutas, cfg }) {
+  const norm = (x) => String(x || '').trim().toLowerCase();
+  const pulpaDe = (n) => pulpas.find((p) => norm(p.nombre) === norm(n));
+  const frutaDe = (n) => frutas.find((f) => norm(f.nombre) === norm(n));
+  const costoPulpaPorcion = (p) => (p && p.porciones_por_kg > 0) ? p.precio_kg / p.porciones_por_kg : 0;
+  const gramosUtiles = (f) => Math.max(0, 1000 - (f?.descarte_g || 0));
+  const costoGramoUtil = (f) => (f && gramosUtiles(f) > 0) ? f.precio_kg / gramosUtiles(f) : 0;
+  function costosReceta(r) {
+    const pulpa = costoPulpaPorcion(pulpaDe(r.pulpa));
+    const fruta = (r.gramos_fruta_porcion || 0) * costoGramoUtil(frutaDe(r.fruta)) + (r.gramos_fruta2_porcion || 0) * costoGramoUtil(frutaDe(r.fruta2));
+    const porcion = pulpa + fruta + (r.otros_costos_porcion || 0);
+    const bloque = porcion * (r.porciones_por_bloque || 1);
+    const jarra = porcion * cfg.porciones_lote / (cfg.jarras_lote || 1);
+    const venta = Number(r.precio_venta_jarra) || Number(cfg.precio_venta_jarra) || 0;
+    return {
+      pulpa, fruta, porcion, bloque, jarra, venta,
+      margen: venta - jarra,
+      margenPct: venta ? (venta - jarra) / venta * 100 : 0,
+      pctCosto: venta ? jarra / venta * 100 : 0,
+      precioSugerido: cfg.tope_costo_pct > 0 ? jarra / (cfg.tope_costo_pct / 100) : 0
+    };
+  }
+  const nombreReceta = (r) => `${r.pulpa}${r.fruta ? ' + ' + r.fruta : ''}${r.fruta2 ? ' + ' + r.fruta2 : ''}`;
+  const recetaDeLote = (recetas, l) => recetas.find((x) => norm(x.pulpa) === norm(l.sabor) && norm(x.fruta) === norm(l.complemento));
+  const bloquesDe = (l) => [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].reduce((a, b) => a + (Number(b) || 0), 0);
+  return { norm, pulpaDe, frutaDe, costoPulpaPorcion, gramosUtiles, costoGramoUtil, costosReceta, nombreReceta, recetaDeLote, bloquesDe };
+}
+
+const fmtCLP = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(Math.round(n || 0));
+const fmtCLP1 = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 1 }).format(n || 0);
+const fmtPct = (n) => (Number(n) || 0).toFixed(1).replace('.', ',') + ' %';
+
+function sumarDiasStr(fecha, dias) {
+  const d = new Date(String(fecha).slice(0, 10) + 'T12:00:00');
+  d.setDate(d.getDate() + dias);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Carga todo lo necesario para costos y análisis (admin y jefe). */
+async function cargarDatosCostos(semana) {
+  const [rp, rf, rr, rcfg, rl, rpc, rs, rh, rcomp, rdia] = await Promise.all([
+    supabase.from('costos_pulpas').select('*').order('nombre'),
+    supabase.from('costos_frutas').select('*').order('nombre'),
+    supabase.from('costos_recetas').select('*').order('pulpa'),
+    supabase.from('costos_config').select('*').eq('id', 1).maybeSingle(),
+    supabase.from('produccion_mezclas').select('*').order('fecha_ingreso'),
+    supabase.from('produccion_costos').select('*'),
+    supabase.from('stock_global').select('*'),
+    supabase.from('costos_historial_precios').select('*').order('cambiado_en'),
+    supabase.from('compras_semanales').select('*').eq('semana_inicio', semana),
+    supabase.from('diario_movimientos').select('sabor,tipo,cantidad').eq('semana_inicio', semana).eq('tipo', 'PULPA')
+  ]);
+  const cfg = { ...CFG_COSTOS_DEFECTO, ...(rcfg.data || {}) };
+  return {
+    pulpas: rp.data || [], frutas: rf.data || [], recetas: rr.data || [], cfg,
+    lotes: rl.data || [], costosLote: new Map((rpc.data || []).map((x) => [x.produccion_id, Number(x.costo_bloque)])),
+    stock: rs.data || [], historial: rh.data || [], compras: rcomp.data || [], diario: rdia.data || [],
+    errorTablas: rp.error || rf.error || rr.error || null,
+    avisoSql18: !!(rcfg.error || rh.error || rpc.error)
+  };
+}
+
+/** Ranking costo × calificación por mezcla (pulpa + fruta). */
+function analizarRanking(D, M) {
+  const grupos = new Map();
+  D.lotes.filter((l) => l.calificacion != null).forEach((l) => {
+    const k = `${M.norm(l.sabor)}|${M.norm(l.complemento)}`;
+    if (!grupos.has(k)) grupos.set(k, { sabor: l.sabor, complemento: l.complemento, notas: [], costos: [] });
+    const g = grupos.get(k);
+    g.notas.push(Number(l.calificacion));
+    if (D.costosLote.has(l.id)) g.costos.push(D.costosLote.get(l.id));
+  });
+  const filas = [...grupos.values()].map((g) => {
+    const r = M.recetaDeLote(D.recetas, { sabor: g.sabor, complemento: g.complemento });
+    const c = r ? M.costosReceta(r) : null;
+    const costoBloque = g.costos.length ? g.costos.reduce((a, b) => a + b, 0) / g.costos.length : (c ? c.bloque : null);
+    const jarra = c ? c.jarra : null;
+    return { nombre: `${g.sabor} + ${g.complemento}`, nota: g.notas.reduce((a, b) => a + b, 0) / g.notas.length, veces: g.notas.length, costoBloque, jarra };
+  });
+  const conCosto = filas.filter((f) => f.jarra != null).sort((a, b) => a.jarra - b.jarra);
+  const mediana = conCosto.length ? conCosto[Math.floor(conCosto.length / 2)].jarra : 0;
+  filas.forEach((f) => {
+    if (f.jarra == null) { f.veredicto = { t: 'Sin receta de costo', c: '#888' }; return; }
+    const barato = f.jarra <= mediana;
+    if (f.nota >= 4 && barato) f.veredicto = { t: '⭐ Repetir: barata y bien calificada', c: '#1D9E75' };
+    else if (f.nota >= 4) f.veredicto = { t: 'Gusta, pero es cara: optimizar receta', c: '#EF9F27' };
+    else if (f.nota < 3.5 && !barato) f.veredicto = { t: 'Considerar sacarla: cara y poco valorada', c: '#E24B4A' };
+    else f.veredicto = { t: 'Revisar', c: '#888' };
+  });
+  return { filas: filas.sort((a, b) => b.nota - a.nota), mediana };
+}
+
+/** Qué conviene producir primero. */
+function analizarProducir(D, M) {
+  const notas = new Map();
+  D.lotes.filter((l) => l.calificacion != null).forEach((l) => {
+    const k = `${M.norm(l.sabor)}|${M.norm(l.complemento)}`;
+    notas.set(k, [...(notas.get(k) || []), Number(l.calificacion)]);
+  });
+  return D.recetas.map((r) => {
+    const k = `${M.norm(r.pulpa)}|${M.norm(r.fruta)}`;
+    const existentes = D.lotes.filter((l) => l.estado !== 'terminado' && M.norm(l.sabor) === M.norm(r.pulpa) && M.norm(l.complemento) === M.norm(r.fruta)).reduce((a, l) => a + M.bloquesDe(l), 0);
+    const stockPulpa = D.stock.filter((x) => String(x.tipo).toUpperCase() === 'PULPA' && M.norm(x.sabor) === M.norm(r.pulpa)).reduce((a, x) => a + Number(x.total), 0);
+    const arr = notas.get(k);
+    const nota = arr ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+    const c = M.costosReceta(r);
+    return { nombre: M.nombreReceta(r), existentes, stockPulpa, nota, jarra: c.jarra, pctCosto: c.pctCosto, sinPulpa: stockPulpa <= 0 };
+  }).sort((a, b) => (a.sinPulpa - b.sinPulpa) || (a.existentes - b.existentes) || ((b.nota ?? 0) - (a.nota ?? 0)) || (a.jarra - b.jarra));
+}
+
+/** Teórico (según recetas y lotes de la semana) vs real (Diario y Frutería). */
+function analizarRealTeorico(D, M, semana) {
+  const fin = sumarDiasStr(semana, 6);
+  const lotesSem = D.lotes.filter((l) => { const f = String(l.fecha_ingreso).slice(0, 10); return f >= semana && f <= fin; });
+  const teoPulpa = new Map(), teoFruta = new Map();
+  lotesSem.forEach((l) => {
+    const r = M.recetaDeLote(D.recetas, l);
+    if (!r) return;
+    const porciones = M.bloquesDe(l) * (r.porciones_por_bloque || 1);
+    const pu = M.pulpaDe(r.pulpa);
+    teoPulpa.set(r.pulpa, (teoPulpa.get(r.pulpa) || 0) + porciones / (pu?.porciones_por_kg || 12));
+    [[r.fruta, r.gramos_fruta_porcion], [r.fruta2, r.gramos_fruta2_porcion]].forEach(([nf, g]) => {
+      const f = M.frutaDe(nf);
+      if (!f || !g || M.gramosUtiles(f) <= 0) return;
+      teoFruta.set(f.nombre, (teoFruta.get(f.nombre) || 0) + porciones * g / M.gramosUtiles(f));
+    });
+  });
+  const filas = [];
+  const nombresPulpa = new Set([...teoPulpa.keys(), ...D.diario.filter((d) => Number(d.cantidad) < 0).map((d) => d.sabor)]);
+  nombresPulpa.forEach((n) => {
+    const real = D.diario.filter((d) => M.norm(d.sabor) === M.norm(n) && Number(d.cantidad) < 0).reduce((a, d) => a + Math.abs(Number(d.cantidad)), 0);
+    const teo = [...teoPulpa.entries()].filter(([k]) => M.norm(k) === M.norm(n)).reduce((a, [, v]) => a + v, 0);
+    const pu = M.pulpaDe(n);
+    filas.push({ tipo: 'Pulpa', unidad: 'unid.', nombre: n, teo, real, precio: pu ? pu.precio_kg : 0 });
+  });
+  const nombresFruta = new Set([...teoFruta.keys(), ...D.frutas.filter((f) => D.compras.some((c) => M.norm(c.producto) === M.norm(f.nombre))).map((f) => f.nombre)]);
+  nombresFruta.forEach((n) => {
+    const real = D.compras.filter((c) => M.norm(c.producto) === M.norm(n)).reduce((a, c) => a + Number(c.cantidad || 0), 0);
+    const f = M.frutaDe(n);
+    filas.push({ tipo: 'Fruta', unidad: 'kg', nombre: n, teo: teoFruta.get(n) || 0, real, precio: f ? f.precio_kg : 0 });
+  });
+  filas.forEach((f) => { f.dif = f.real - f.teo; f.difPct = f.teo > 0 ? f.dif / f.teo * 100 : null; f.valor = f.dif * f.precio; });
+  return { filas: filas.sort((a, b) => Math.abs(b.valor) - Math.abs(a.valor)), lotes: lotesSem.length, fin };
+}
 
 // ---------------- Centro de costos ----------------
 
 let pestanaCostos = 'calcular';
+let precioSel = '';
 
 function numCosto(v) {
   const n = Number(String(v ?? '').replace(',', '.').trim());
@@ -624,30 +777,26 @@ async function vistaCentroCostos() {
   const clp = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(Math.round(n || 0));
   const clp1 = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 1 }).format(n || 0);
 
-  const [rp, rf, rr, rl, rs, rpre] = await Promise.all([
+  const [rp, rf, rr, rl, rs, rpre, rcfg, rhist, rpc] = await Promise.all([
     supabase.from('costos_pulpas').select('*').order('nombre'),
     supabase.from('costos_frutas').select('*').order('nombre'),
     supabase.from('costos_recetas').select('*').order('pulpa'),
     supabase.from('produccion_mezclas').select('*').neq('estado', 'terminado').order('fecha_ingreso'),
     supabase.from('stock_global').select('*'),
-    supabase.from('precios_sabores').select('*')
+    supabase.from('precios_sabores').select('*'),
+    supabase.from('costos_config').select('*').eq('id', 1).maybeSingle(),
+    supabase.from('costos_historial_precios').select('*').order('cambiado_en'),
+    supabase.from('produccion_costos').select('*')
   ]);
   const errTablas = rp.error || rf.error || rr.error;
   const pulpas = rp.data || [], frutas = rf.data || [], recetas = rr.data || [], lotes = rl.data || [];
 
-  const norm = (x) => String(x || '').trim().toLowerCase();
-  const pulpaDe = (n) => pulpas.find((p) => norm(p.nombre) === norm(n));
-  const frutaDe = (n) => frutas.find((f) => norm(f.nombre) === norm(n));
-
-  const costoPulpaPorcion = (p) => (p && p.porciones_por_kg > 0) ? p.precio_kg / p.porciones_por_kg : 0;
-  const gramosUtiles = (f) => Math.max(0, 1000 - (f?.descarte_g || 0));
-  const costoGramoUtil = (f) => (f && gramosUtiles(f) > 0) ? f.precio_kg / gramosUtiles(f) : 0;
-  function costosReceta(r) {
-    const pulpa = costoPulpaPorcion(pulpaDe(r.pulpa));
-    const fruta = r.gramos_fruta_porcion * costoGramoUtil(frutaDe(r.fruta));
-    const porcion = pulpa + fruta + (r.otros_costos_porcion || 0);
-    return { pulpa, fruta, porcion, bloque: porcion * (r.porciones_por_bloque || 1) };
-  }
+  const cfg = { ...CFG_COSTOS_DEFECTO, ...(rcfg.data || {}) };
+  const avisoSql18 = !!(rcfg.error || rhist.error || rpc.error);
+  const historial = rhist.data || [];
+  const costosLote = new Map((rpc.data || []).map((x) => [x.produccion_id, Number(x.costo_bloque)]));
+  const M = crearModeloCostos({ pulpas, frutas, cfg });
+  const { norm, pulpaDe, frutaDe, costoPulpaPorcion, gramosUtiles, costoGramoUtil, costosReceta } = M;
   const totalBloques = (l) => [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].reduce((a, b) => a + (Number(b) || 0), 0);
 
   const inp = (campo, valor, ph, ancho = 'w-full') => `<input type="text" inputmode="decimal" data-campo="${campo}" value="${valor ?? ''}" placeholder="${ph}" class="${ancho} !h-8 !px-2 text-xs" ${esAdmin ? '' : 'disabled'} />`;
@@ -675,19 +824,21 @@ async function vistaCentroCostos() {
   function seccionMezclas() {
     const fila = (r, nueva) => {
       const c = nueva ? null : costosReceta(r);
-      const gUnidad = r && frutaDe(r.fruta) && frutaDe(r.fruta).unidades_por_kg > 0 ? gramosUtiles(frutaDe(r.fruta)) / frutaDe(r.fruta).unidades_por_kg : 0;
+      const f1 = r ? frutaDe(r.fruta) : null;
+      const gUnidad = f1 && f1.unidades_por_kg > 0 ? gramosUtiles(f1) / f1.unidades_por_kg : 0;
+      const alerta = c && c.pctCosto > cfg.tope_costo_pct;
       return caja('costos_recetas', nueva ? '' : r.id,
-        `<div class="grid grid-cols-2 gap-2">${lab('Pulpa', txt('pulpa', r?.pulpa, 'ej. Mango', 'lista-costos-pulpas'))}${lab('Fruta (opcional)', txt('fruta', r?.fruta, 'ej. Durazno', 'lista-costos-frutas'))}${lab('Gramos de fruta por porción', inp('gramos_fruta_porcion', r?.gramos_fruta_porcion, '0'))}${lab('Porciones por bloque', inp('porciones_por_bloque', r?.porciones_por_bloque ?? 1, '1'))}${lab('Otros costos por porción ($)', inp('otros_costos_porcion', r?.otros_costos_porcion ?? 0, '0'))}</div>`,
-        nueva ? '' : `<span class="text-neutral-700"><b>${r.pulpa}${r.fruta ? ' + ' + r.fruta : ''}</b></span><br>
-          Pulpa ${clp1(c.pulpa)} + fruta ${clp1(c.fruta)}${r.otros_costos_porcion ? ' + otros ' + clp1(r.otros_costos_porcion) : ''}${gUnidad ? ` (≈ ${(r.gramos_fruta_porcion / gUnidad).toFixed(2)} unid. de fruta)` : ''}<br>
-          Por unidad (porción): <b>${clp1(c.porcion)}</b> · Por bloque: <b>${clp1(c.bloque)}</b>`, nueva);
+        `<div class="grid grid-cols-2 gap-2">${lab('Pulpa', txt('pulpa', r?.pulpa, 'ej. Mango', 'lista-costos-pulpas'))}${lab('Fruta (opcional)', txt('fruta', r?.fruta, 'ej. Durazno', 'lista-costos-frutas'))}${lab('Gramos de fruta por porción', inp('gramos_fruta_porcion', r?.gramos_fruta_porcion, '0'))}${lab('Segunda fruta (opcional)', txt('fruta2', r?.fruta2, 'ej. Plátano', 'lista-costos-frutas'))}${lab('Gramos de la segunda fruta', inp('gramos_fruta2_porcion', r?.gramos_fruta2_porcion ?? 0, '0'))}${lab('Porciones por bloque', inp('porciones_por_bloque', r?.porciones_por_bloque ?? 1, '1'))}${lab('Otros ingredientes/envase por porción ($)', inp('otros_costos_porcion', r?.otros_costos_porcion ?? 0, '0'))}${lab('Precio de venta por jarra ($, vacío = general)', inp('precio_venta_jarra', r?.precio_venta_jarra ?? '', String(cfg.precio_venta_jarra)))}</div>`,
+        nueva ? '' : `<span class="text-neutral-700"><b>${M.nombreReceta(r)}</b></span>${alerta ? ' <span class="rounded-full bg-rojo/10 px-2 py-0.5 text-[10px] font-medium text-rojo">sobre el tope de costo</span>' : ''}<br>
+          Pulpa ${clp1(c.pulpa)} + fruta ${clp1(c.fruta)}${r.otros_costos_porcion ? ' + otros ' + clp1(r.otros_costos_porcion) : ''}${gUnidad && r.gramos_fruta_porcion ? ` (≈ ${(r.gramos_fruta_porcion / gUnidad).toFixed(2)} unid. de ${r.fruta})` : ''}<br>
+          Por unidad (porción): <b>${clp1(c.porcion)}</b> · Por bloque: <b>${clp1(c.bloque)}</b> · Por jarra: <b>${clp1(c.jarra)}</b><br>
+          Venta ${clp(c.venta)} · Margen <b class="${c.margen >= 0 ? 'text-verde' : 'text-rojo'}">${clp(c.margen)} (${fmtPct(c.margenPct)})</b> · Costo ${fmtPct(c.pctCosto)} del precio`, nueva);
     };
     return `<datalist id="lista-costos-pulpas">${pulpas.map((p) => `<option>${p.nombre}</option>`).join('')}</datalist>
       <datalist id="lista-costos-frutas">${frutas.map((f) => `<option>${f.nombre}</option>`).join('')}</datalist>
       ${recetas.map((r) => fila(r, false)).join('') || '<p class="mb-2 text-xs text-neutral-400">Aún no hay mezclas. Carga primero pulpas y frutas.</p>'}
       ${esAdmin ? `<p class="mb-1 mt-3 text-[11px] text-neutral-400">Agregar mezcla</p>` + fila(null, true) : ''}`;
   }
-
 
   function pulpasSugeridas() {
     const precios = rpre.data || [];
@@ -745,7 +896,7 @@ async function vistaCentroCostos() {
 
 
   function leerCmp() {
-    const base = { porc: 12, jarras: 14, venta: 4990, fa: '', ga: '', fb: '', gb: '' };
+    const base = { porc: cfg.porciones_lote, jarras: cfg.jarras_lote, venta: cfg.precio_venta_jarra, fa: '', ga: '', fb: '', gb: '' };
     try { return { ...base, ...JSON.parse(localStorage.getItem('cep_cmp') || '{}') }; } catch (e) { return base; }
   }
   function guardarCmp(c) { try { localStorage.setItem('cep_cmp', JSON.stringify(c)); } catch (e) { /* sin almacenamiento */ } }
@@ -822,25 +973,119 @@ async function vistaCentroCostos() {
   }
 
   function seccionProducciones() {
-    let total = 0, sinReceta = 0;
+    let total = 0, sinReceta = 0, congelados = 0;
     const filas = lotes.map((l) => {
-      const r = recetas.find((x) => norm(x.pulpa) === norm(l.sabor) && norm(x.fruta) === norm(l.complemento));
-      const bloques = totalBloques(l);
-      if (!r) { sinReceta++; return `<div class="flex items-center justify-between border-b border-neutral-100 py-2 text-xs"><span>${l.sabor} + ${l.complemento} <span class="text-neutral-400">· ${bloques} bloques</span></span><span class="text-neutral-400">sin receta</span></div>`; }
-      const c = costosReceta(r);
-      const sub = bloques * c.bloque;
+      const bloques = M.bloquesDe(l);
+      const r = M.recetaDeLote(recetas, l);
+      const frozen = costosLote.get(l.id);
+      if (frozen == null && !r) { sinReceta++; return `<div class="flex items-center justify-between border-b border-neutral-100 py-2 text-xs"><span>${l.sabor} + ${l.complemento} <span class="text-neutral-400">· ${bloques} bloques</span></span><span class="text-neutral-400">sin receta</span></div>`; }
+      const costoBloque = frozen != null ? frozen : costosReceta(r).bloque;
+      if (frozen != null) congelados++;
+      const sub = bloques * costoBloque;
       total += sub;
-      return `<div class="flex items-center justify-between border-b border-neutral-100 py-2 text-xs"><span>${l.sabor} + ${l.complemento}<br><span class="text-[10.5px] text-neutral-400">${bloques} bloques × ${clp1(c.bloque)} · ${l.ubicacion === 'SALON' ? 'Salón' : 'Cámara'}</span></span><b>${clp(sub)}</b></div>`;
+      return `<div class="flex items-center justify-between border-b border-neutral-100 py-2 text-xs"><span>${l.sabor} + ${l.complemento}<br><span class="text-[10.5px] text-neutral-400">${bloques} bloques × ${clp1(costoBloque)} · ${l.ubicacion === 'SALON' ? 'Salón' : 'Cámara'} · ${frozen != null ? '🔒 costo del día de producción' : 'costo de hoy (sin congelar)'}</span></span><b>${clp(sub)}</b></div>`;
     }).join('');
-    return `<div class="mb-3 rounded-xl border border-neutral-200 p-3"><p class="text-[11px] text-neutral-500">Costo total de lo producido (en cámara y salón)</p><p class="text-xl font-medium text-marca">${clp(total)}</p>${sinReceta ? `<p class="text-[10.5px] text-neutral-400">${sinReceta} lote(s) sin receta: crea la mezcla con la misma pulpa y fruta.</p>` : ''}</div>` + (filas || '<p class="text-xs text-neutral-400">No hay producciones activas.</p>');
+    const pendientes = lotes.length - congelados - sinReceta;
+    return `<div class="mb-3 rounded-xl border border-neutral-200 p-3"><p class="text-[11px] text-neutral-500">Costo total de lo producido (en cámara y salón)</p><p class="text-xl font-medium text-marca">${clp(total)}</p>${sinReceta ? `<p class="text-[10.5px] text-neutral-400">${sinReceta} lote(s) sin receta: crea la mezcla con la misma pulpa y fruta.</p>` : ''}
+      <p class="mt-1 text-[10.5px] text-neutral-400">🔒 Cada lote nuevo guarda el costo que tenía el día que se elaboró; si el precio de la fruta sube después, su valor no cambia.</p>
+      ${esAdmin && pendientes > 0 ? `<button id="btn-congelar-costos" class="mt-2 h-8 rounded-lg border border-marca px-3 text-[11px] font-medium text-marca">Congelar ${pendientes} lote(s) con el costo de hoy</button>` : ''}</div>` + (filas || '<p class="text-xs text-neutral-400">No hay producciones activas.</p>');
   }
 
-  const pestanas = [['calcular', 'Calcular'], ['comparativo', 'Comparar'], ['mezclas', 'Mezclas'], ['pulpas', 'Pulpas'], ['frutas', 'Frutas'], ['producciones', 'Producidas']];
-  const cuerpo = pestanaCostos === 'calcular' ? seccionCalcular() : pestanaCostos === 'comparativo' ? seccionComparativo() : pestanaCostos === 'pulpas' ? seccionPulpas() : pestanaCostos === 'frutas' ? seccionFrutas() : pestanaCostos === 'producciones' ? seccionProducciones() : seccionMezclas();
+  function seccionMargenes() {
+    const filas = recetas.map((r) => ({ r, c: costosReceta(r) })).sort((a, b) => b.c.pctCosto - a.c.pctCosto);
+    const maxPct = Math.max(cfg.tope_costo_pct * 1.3, ...filas.map((x) => x.c.pctCosto), 1);
+    const inpCfg = (id, t, v) => `<div><p class="mb-0.5 text-[10px] text-neutral-400">${t}</p><input id="${id}" type="text" inputmode="decimal" value="${v}" class="w-full !h-8 !px-2 text-xs" ${esAdmin ? '' : 'disabled'} /></div>`;
+    const alertas = filas.filter((x) => x.c.pctCosto > cfg.tope_costo_pct);
+    return `
+      <div class="mb-3 rounded-xl border border-neutral-200 p-3">
+        <p class="mb-2 text-xs font-medium text-neutral-600">Parámetros generales</p>
+        <div class="grid grid-cols-2 gap-2">
+          ${inpCfg('cfg-venta', 'Precio de venta por jarra ($)', cfg.precio_venta_jarra)}
+          ${inpCfg('cfg-tope', 'Tope de costo (% del precio)', cfg.tope_costo_pct)}
+          ${inpCfg('cfg-porc', 'Porciones por lote', cfg.porciones_lote)}
+          ${inpCfg('cfg-jarras', 'Jarras (500 cc) por lote', cfg.jarras_lote)}
+        </div>
+        ${esAdmin ? '<button id="btn-guardar-cfg" class="mt-2 h-8 w-full rounded-lg bg-marca text-xs font-medium text-white">Guardar parámetros</button>' : ''}
+      </div>
+      ${alertas.length ? `<div class="mb-3 rounded-xl border border-rojo p-3 text-xs text-rojo"><b>${alertas.length} mezcla(s) sobre el tope de ${fmtPct(cfg.tope_costo_pct)}:</b> ${alertas.map((x) => M.nombreReceta(x.r)).join(', ')}.</div>` : (filas.length ? '<div class="mb-3 rounded-xl border border-verde p-3 text-xs text-verde">✅ Todas las mezclas están dentro del tope de costo.</div>' : '')}
+      <div class="mb-3 rounded-xl border border-neutral-200 p-3">
+        <p class="mb-2 text-xs font-medium text-neutral-600">Costo como % del precio de venta <span class="font-normal text-neutral-400">(la línea marca el tope)</span></p>
+        ${filas.map((x) => `<div class="mb-2"><div class="flex justify-between text-[11px] text-neutral-600"><span>${M.nombreReceta(x.r)}</span><span class="${x.c.pctCosto > cfg.tope_costo_pct ? 'text-rojo font-medium' : ''}">${fmtPct(x.c.pctCosto)}</span></div>
+          <div class="relative h-3 rounded-sm bg-neutral-100"><div class="h-3 rounded-sm ${x.c.pctCosto > cfg.tope_costo_pct ? 'bg-rojo' : 'bg-verde'}" style="width:${Math.max(2, x.c.pctCosto / maxPct * 100)}%"></div>
+          <div class="absolute top-[-2px] h-4 w-0.5 bg-neutral-700" style="left:${cfg.tope_costo_pct / maxPct * 100}%"></div></div></div>`).join('') || '<p class="text-xs text-neutral-400">Crea mezclas para ver sus márgenes.</p>'}
+      </div>
+      <div class="overflow-x-auto rounded-xl border border-neutral-200"><table class="w-full text-[11px]"><thead><tr class="border-b border-neutral-200 text-left text-neutral-500">
+        <th class="p-2">Mezcla</th><th class="p-2">Costo jarra</th><th class="p-2">Venta</th><th class="p-2">Margen</th><th class="p-2">Precio mín.*</th></tr></thead><tbody>
+        ${filas.map((x) => `<tr class="border-b border-neutral-100"><td class="p-2 font-medium">${M.nombreReceta(x.r)}</td><td class="p-2">${clp(x.c.jarra)}</td><td class="p-2">${clp(x.c.venta)}</td><td class="p-2 ${x.c.margen >= 0 ? 'text-verde' : 'text-rojo'}">${clp(x.c.margen)} (${fmtPct(x.c.margenPct)})</td><td class="p-2">${clp(x.c.precioSugerido)}</td></tr>`).join('')}
+      </tbody></table></div>
+      <p class="mt-2 text-[10.5px] text-neutral-400">* Precio mínimo para que el costo no supere el tope. Solo considera pulpa, fruta y otros ingredientes cargados en cada mezcla.</p>`;
+  }
+
+  function lineaSvg(puntos) {
+    if (puntos.length < 2) return '<p class="text-[11px] text-neutral-400">Se necesitan al menos 2 precios para dibujar la evolución.</p>';
+    const W = 300, H = 90, pad = 8;
+    const ys = puntos.map((p) => p.y), min = Math.min(...ys), max = Math.max(...ys), rango = (max - min) || 1;
+    const xy = puntos.map((p, i) => [pad + i * (W - 2 * pad) / (puntos.length - 1), H - pad - ((p.y - min) / rango) * (H - 2 * pad)]);
+    return `<svg viewBox="0 0 ${W} ${H}" class="w-full text-marca" role="img" aria-label="Evolución del precio">
+      <polyline fill="none" stroke="currentColor" stroke-width="2" points="${xy.map((q) => q.join(',')).join(' ')}" />
+      ${xy.map((q) => `<circle cx="${q[0]}" cy="${q[1]}" r="3" fill="currentColor" />`).join('')}
+    </svg>
+    <div class="flex justify-between text-[10px] text-neutral-400"><span>${puntos[0].etiqueta}</span><span>${puntos[puntos.length - 1].etiqueta}</span></div>`;
+  }
+
+  function seccionPrecios() {
+    if (avisoSql18) return '<p class="text-xs text-neutral-400">Para ver el historial de precios ejecuta 18_costos_avanzados.sql en Supabase.</p>';
+    const claves = [...new Set(historial.map((h) => `${h.tipo}|${h.nombre}`))];
+    if (!claves.length) return '<p class="text-xs text-neutral-400">Aún no hay precios registrados. Cada cambio de precio de una pulpa o fruta quedará guardado aquí automáticamente.</p>';
+    if (!claves.includes(precioSel)) precioSel = claves[0];
+    const [tipoSel, nombreSel] = precioSel.split('|');
+    const hs = historial.filter((h) => h.tipo === tipoSel && h.nombre === nombreSel);
+    const fecha = (h) => new Date(h.cambiado_en).toLocaleDateString('es-CL', { day: '2-digit', month: 'short', year: '2-digit' });
+    const resumen = claves.map((k) => {
+      const hk = historial.filter((h) => `${h.tipo}|${h.nombre}` === k);
+      const ini = Number(hk[0].precio_kg), fin = Number(hk[hk.length - 1].precio_kg);
+      return { k, nombre: hk[0].nombre, tipo: hk[0].tipo, ini, fin, pct: ini ? (fin - ini) / ini * 100 : 0, cambios: hk.length - 1 };
+    }).sort((a, b) => b.pct - a.pct);
+    // impacto del último cambio en el costo por jarra de cada mezcla
+    const ult = hs[hs.length - 1];
+    let impacto = '';
+    if (ult && ult.anterior != null) {
+      const d = Number(ult.precio_kg) - Number(ult.anterior);
+      const lineas = recetas.map((r) => {
+        let dPorcion = 0;
+        if (tipoSel === 'pulpa' && norm(r.pulpa) === norm(nombreSel)) dPorcion = d / (pulpaDe(nombreSel)?.porciones_por_kg || 12);
+        if (tipoSel === 'fruta') {
+          const f = frutaDe(nombreSel), util = gramosUtiles(f) || 1000;
+          if (norm(r.fruta) === norm(nombreSel)) dPorcion += d / util * (r.gramos_fruta_porcion || 0);
+          if (norm(r.fruta2) === norm(nombreSel)) dPorcion += d / util * (r.gramos_fruta2_porcion || 0);
+        }
+        return dPorcion ? { n: M.nombreReceta(r), dJarra: dPorcion * cfg.porciones_lote / (cfg.jarras_lote || 1) } : null;
+      }).filter(Boolean);
+      impacto = lineas.length ? `<p class="mb-1 mt-3 text-xs font-medium text-neutral-600">Impacto del último cambio (${d >= 0 ? '+' : ''}${clp(d)}/kg) en el costo por jarra</p>` + lineas.map((x) => `<div class="flex justify-between text-[11px]"><span>${x.n}</span><b class="${x.dJarra > 0 ? 'text-rojo' : 'text-verde'}">${x.dJarra > 0 ? '+' : ''}${clp1(x.dJarra)}</b></div>`).join('') : '';
+    }
+    return `
+      <select id="sel-precio" class="mb-3 w-full !h-9 !px-2 text-sm">${claves.map((k) => { const [t, n] = k.split('|'); return `<option value="${k}" ${k === precioSel ? 'selected' : ''}>${t === 'pulpa' ? 'Pulpa' : 'Fruta'} · ${n}</option>`; }).join('')}</select>
+      <div class="mb-3 rounded-xl border border-neutral-200 p-3">
+        <p class="mb-1 text-xs font-medium text-neutral-600">Evolución del valor por kilo · ${nombreSel}</p>
+        ${lineaSvg(hs.map((h) => ({ y: Number(h.precio_kg), etiqueta: fecha(h) })))}
+        <div class="mt-2">${hs.slice().reverse().map((h) => `<div class="flex justify-between border-b border-neutral-100 py-1 text-[11px]"><span class="text-neutral-500">${fecha(h)}</span><span>${h.anterior != null ? clp(h.anterior) + ' → ' : ''}<b>${clp(h.precio_kg)}</b>${h.anterior != null && Number(h.anterior) ? ` <span class="${Number(h.precio_kg) > Number(h.anterior) ? 'text-rojo' : 'text-verde'}">(${Number(h.precio_kg) > Number(h.anterior) ? '+' : ''}${((Number(h.precio_kg) / Number(h.anterior) - 1) * 100).toFixed(1).replace('.', ',')} %)</span>` : ''}</span></div>`).join('')}</div>
+        ${impacto}
+      </div>
+      <div class="rounded-xl border border-neutral-200 p-3">
+        <p class="mb-2 text-xs font-medium text-neutral-600">Variación desde el primer registro</p>
+        ${resumen.map((x) => `<div class="flex justify-between text-[11px] py-0.5"><span>${x.tipo === 'pulpa' ? 'Pulpa' : 'Fruta'} · ${x.nombre} <span class="text-neutral-400">(${x.cambios} cambio${x.cambios === 1 ? '' : 's'})</span></span><b class="${x.pct > 0 ? 'text-rojo' : x.pct < 0 ? 'text-verde' : 'text-neutral-400'}">${x.pct > 0 ? '+' : ''}${x.pct.toFixed(1).replace('.', ',')} %</b></div>`).join('')}
+      </div>`;
+  }
+
+  const pestanas = [['calcular', 'Calcular'], ['comparativo', 'Comparar'], ['mezclas', 'Mezclas'], ['margenes', 'Márgenes'], ['precios', 'Precios'], ['pulpas', 'Pulpas'], ['frutas', 'Frutas'], ['producciones', 'Producidas']];
+  const secciones = { calcular: seccionCalcular, comparativo: seccionComparativo, mezclas: seccionMezclas, margenes: seccionMargenes, precios: seccionPrecios, pulpas: seccionPulpas, frutas: seccionFrutas, producciones: seccionProducciones };
+  const cuerpo = (secciones[pestanaCostos] || seccionMezclas)();
 
   app.innerHTML = shell('Centro de costos', `
     <div class="p-4">
       ${errTablas ? `<p class="mb-3 rounded-lg border border-rojo p-3 text-xs text-rojo">No se pudo leer el centro de costos (${errTablas.message}). ¿Ejecutaste 16_centro_de_costos.sql en Supabase?</p>` : ''}
+      ${avisoSql18 ? '<p class="mb-3 rounded-lg border border-amarillo p-3 text-xs text-amarillo">Para usar márgenes, historial de precios y costo congelado ejecuta <b>18_costos_avanzados.sql</b> en Supabase.</p>' : ''}
+      <div class="mb-2 flex justify-end"><button id="btn-pdf-costos" class="rounded-full border border-neutral-200 px-3 py-1 text-[11px] text-neutral-600">📄 Informe PDF</button></div>
       <div class="mb-3 flex gap-1.5 overflow-x-auto">
         ${pestanas.map(([k, t]) => `<button data-pestana="${k}" class="btn-pestana-costos whitespace-nowrap rounded-full px-3 py-1.5 text-xs ${pestanaCostos === k ? 'bg-marca text-white font-medium' : 'border border-neutral-200 text-neutral-500'}">${t}</button>`).join('')}
       </div>
@@ -851,6 +1096,21 @@ async function vistaCentroCostos() {
   montarShell();
 
   document.querySelectorAll('.btn-pestana-costos').forEach((b) => b.addEventListener('click', async () => { pestanaCostos = b.dataset.pestana; await vistaCentroCostos(); }));
+
+  document.getElementById('btn-pdf-costos')?.addEventListener('click', descargarInformeCostosPdf);
+  document.getElementById('sel-precio')?.addEventListener('change', async (e) => { precioSel = e.target.value; await vistaCentroCostos(); });
+  document.getElementById('btn-congelar-costos')?.addEventListener('click', async () => {
+    const { data, error } = await supabase.rpc('congelar_costos_pendientes');
+    if (error) return alert('No se pudo congelar: ' + error.message);
+    alert(`Se congelaron ${data} lote(s) con el costo de hoy.`);
+    await vistaCentroCostos();
+  });
+  document.getElementById('btn-guardar-cfg')?.addEventListener('click', async () => {
+    const g = (id) => numCosto(document.getElementById(id).value);
+    const { error } = await supabase.from('costos_config').upsert([{ id: 1, precio_venta_jarra: g('cfg-venta') || 4990, tope_costo_pct: g('cfg-tope') || 12, porciones_lote: g('cfg-porc') || 12, jarras_lote: g('cfg-jarras') || 14, updated_at: new Date().toISOString() }], { onConflict: 'id' });
+    if (error) return alert('No se pudo guardar: ' + error.message);
+    await vistaCentroCostos();
+  });
 
   if (pestanaCostos === 'calcular') {
     const g = (id) => document.getElementById(id);
@@ -920,7 +1180,7 @@ async function vistaCentroCostos() {
 
   if (!esAdmin) return;
 
-  const camposNum = { costos_pulpas: ['precio_kg', 'porciones_por_kg'], costos_frutas: ['precio_kg', 'unidades_por_kg', 'descarte_g'], costos_recetas: ['gramos_fruta_porcion', 'porciones_por_bloque', 'otros_costos_porcion'] };
+  const camposNum = { costos_pulpas: ['precio_kg', 'porciones_por_kg'], costos_frutas: ['precio_kg', 'unidades_por_kg', 'descarte_g'], costos_recetas: ['gramos_fruta_porcion', 'gramos_fruta2_porcion', 'porciones_por_bloque', 'otros_costos_porcion', 'precio_venta_jarra'] };
   const pk = { costos_pulpas: 'nombre', costos_frutas: 'nombre', costos_recetas: 'id' };
 
   document.querySelectorAll('.btn-guardar-costo').forEach((btn) => {
@@ -937,6 +1197,8 @@ async function vistaCentroCostos() {
       if (tabla === 'costos_recetas') {
         if (!datos.pulpa) return alert('Indica la pulpa de la mezcla.');
         if (datos.fruta === '') datos.fruta = null;
+        if (datos.fruta2 === '') datos.fruta2 = null;
+        if (!datos.precio_venta_jarra) datos.precio_venta_jarra = null;
         ({ error } = clave ? await supabase.from(tabla).update(datos).eq('id', clave) : await supabase.from(tabla).insert([datos]));
       } else {
         if (!clave && !datos.nombre) return alert('Escribe un nombre.');
@@ -957,6 +1219,132 @@ async function vistaCentroCostos() {
       await vistaCentroCostos();
     });
   });
+}
+
+
+// ---------------- Análisis de producción ----------------
+
+let pestanaAnalisis = 'producir';
+let semanaAnalisis = '';
+
+function scatterRanking(filas, mediana) {
+  const datos = filas.filter((f) => f.jarra != null);
+  if (datos.length < 1) return '';
+  const W = 320, H = 200, pl = 34, pr = 10, pt = 10, pb = 26;
+  const xs = datos.map((f) => f.jarra), minX = Math.min(...xs, mediana) * 0.9, maxX = Math.max(...xs, mediana) * 1.1 || 1;
+  const X = (v) => pl + ((v - minX) / ((maxX - minX) || 1)) * (W - pl - pr);
+  const Y = (n) => pt + (1 - (n - 1) / 4) * (H - pt - pb);
+  return `<svg viewBox="0 0 ${W} ${H}" class="w-full text-neutral-500" role="img" aria-label="Costo por jarra contra calificación">
+    ${[1, 2, 3, 4, 5].map((n) => `<line x1="${pl}" x2="${W - pr}" y1="${Y(n)}" y2="${Y(n)}" stroke="currentColor" stroke-opacity="0.15" /><text x="${pl - 6}" y="${Y(n) + 3}" text-anchor="end" font-size="9" fill="currentColor">${n}★</text>`).join('')}
+    <line x1="${X(mediana)}" x2="${X(mediana)}" y1="${pt}" y2="${H - pb}" stroke="currentColor" stroke-dasharray="3 3" stroke-opacity="0.5" />
+    <text x="${X(mediana)}" y="${H - 12}" text-anchor="middle" font-size="9" fill="currentColor">mediana ${fmtCLP(mediana)}</text>
+    <text x="${W - pr}" y="${H - 2}" text-anchor="end" font-size="9" fill="currentColor">costo por jarra →</text>
+    ${datos.map((f) => `<circle cx="${X(f.jarra)}" cy="${Y(f.nota)}" r="5" fill="${f.veredicto.c}" /><text x="${X(f.jarra) + 7}" y="${Y(f.nota) + 3}" font-size="8" fill="currentColor">${f.nombre.split(' + ')[0]}</text>`).join('')}
+  </svg>`;
+}
+
+async function vistaAnalisis() {
+  const semanasOpc = Array.from({ length: 8 }, (_, i) => sumarDiasStr(semanaActual(), -7 * i));
+  if (!semanaAnalisis) semanaAnalisis = semanaActual();
+  await cargarUmbrales();
+  const D = await cargarDatosCostos(semanaAnalisis);
+  const M = crearModeloCostos(D);
+
+  let cuerpo = '';
+  if (pestanaAnalisis === 'ranking') {
+    const R = analizarRanking(D, M);
+    cuerpo = !R.filas.length
+      ? '<p class="text-xs text-neutral-400">Aún no hay lotes finalizados con calificación. Califica sabores al finalizarlos en Producción y aparecerán aquí cruzados con su costo.</p>'
+      : `<div class="mb-3 rounded-xl border border-neutral-200 p-3">
+          <p class="mb-1 text-xs font-medium text-neutral-600">Calificación vs. costo por jarra</p>
+          ${scatterRanking(R.filas, R.mediana)}
+          <p class="mt-1 text-[10.5px] text-neutral-400">Arriba a la izquierda: baratas y bien calificadas.</p></div>
+        ${R.filas.map((f) => `<div class="mb-2 rounded-xl border border-neutral-200 p-3"><div class="flex justify-between text-xs"><b>${f.nombre}</b><span>${'★'.repeat(Math.round(f.nota))}${'☆'.repeat(5 - Math.round(f.nota))} ${f.nota.toFixed(1).replace('.', ',')}</span></div>
+          <p class="mt-0.5 text-[11px] text-neutral-500">${f.veces} lote(s) calificado(s)${f.jarra != null ? ` · ${fmtCLP(f.jarra)} por jarra · ${f.costoBloque != null ? fmtCLP1(f.costoBloque) + ' por bloque' : ''}` : ''}</p>
+          <p class="mt-1 text-[11px] font-medium" style="color:${f.veredicto.c}">${f.veredicto.t}</p></div>`).join('')}`;
+  } else if (pestanaAnalisis === 'producir') {
+    const L = analizarProducir(D, M);
+    cuerpo = !L.length
+      ? '<p class="text-xs text-neutral-400">Crea mezclas en el Centro de costos para recibir sugerencias.</p>'
+      : `<p class="mb-3 text-[11px] text-neutral-500">Se priorizan las mezclas con menos bloques existentes (cámara + salón) y pulpa disponible; a igualdad, las mejor calificadas y más baratas.</p>
+        ${L.map((x, i) => `<div class="mb-2 rounded-xl border ${i < 3 && !x.sinPulpa ? 'border-marca' : 'border-neutral-200'} p-3">
+          <div class="flex justify-between text-xs"><b>${i < 3 && !x.sinPulpa ? '👉 ' : ''}${x.nombre}</b><span class="text-neutral-500">${fmtCLP(x.jarra)} / jarra</span></div>
+          <div class="mt-1 flex flex-wrap gap-1.5 text-[10.5px]">
+            <span class="rounded-full bg-neutral-100 px-2 py-0.5">${x.existentes} bloques existentes</span>
+            <span class="rounded-full px-2 py-0.5 ${x.sinPulpa ? 'bg-rojo/10 text-rojo' : 'bg-neutral-100'}">${x.sinPulpa ? 'sin pulpa en stock' : x.stockPulpa + ' pulpas en stock'}</span>
+            ${x.nota != null ? `<span class="rounded-full bg-neutral-100 px-2 py-0.5">★ ${x.nota.toFixed(1).replace('.', ',')}</span>` : ''}
+            <span class="rounded-full px-2 py-0.5 ${x.pctCosto > D.cfg.tope_costo_pct ? 'bg-rojo/10 text-rojo' : 'bg-neutral-100'}">costo ${fmtPct(x.pctCosto)}</span></div></div>`).join('')}`;
+  } else {
+    const R = analizarRealTeorico(D, M, semanaAnalisis);
+    const maxV = Math.max(...R.filas.flatMap((f) => [f.teo, f.real]), 0.0001);
+    cuerpo = `<select id="sel-semana-analisis" class="mb-3 w-full !h-9 !px-2 text-sm">${semanasOpc.map((w) => `<option value="${w}" ${w === semanaAnalisis ? 'selected' : ''}>Semana del ${new Date(w + 'T12:00:00').toLocaleDateString('es-CL', { day: '2-digit', month: 'short' })}</option>`).join('')}</select>
+      <p class="mb-3 text-[11px] text-neutral-500">Teórico = lo que deberían consumir las ${R.lotes} producción(es) de la semana según sus recetas. Real = salidas de pulpa registradas en el Diario y compras de fruta registradas en Frutería (en kg).</p>
+      ${!R.filas.length ? '<p class="text-xs text-neutral-400">No hay datos de esa semana para comparar.</p>' : `
+      <div class="mb-3 rounded-xl border border-neutral-200 p-3">
+        <div class="mb-2 flex gap-3 text-[10.5px] text-neutral-500"><span class="flex items-center gap-1"><i class="inline-block h-2.5 w-2.5 rounded-sm bg-marca"></i>Teórico</span><span class="flex items-center gap-1"><i class="inline-block h-2.5 w-2.5 rounded-sm bg-verde"></i>Real</span></div>
+        ${R.filas.map((f) => `<div class="mb-2"><p class="mb-0.5 text-[11px] text-neutral-600">${f.tipo} · ${f.nombre}</p>
+          <div class="flex items-center gap-2"><div class="flex-1"><div class="h-3 rounded-sm bg-marca" style="width:${Math.max(2, f.teo / maxV * 100)}%"></div></div><span class="w-16 text-right text-[10.5px] text-neutral-500">${f.teo.toFixed(1).replace('.', ',')} ${f.unidad}</span></div>
+          <div class="mt-0.5 flex items-center gap-2"><div class="flex-1"><div class="h-3 rounded-sm bg-verde" style="width:${Math.max(2, f.real / maxV * 100)}%"></div></div><span class="w-16 text-right text-[10.5px] text-neutral-500">${f.real.toFixed(1).replace('.', ',')} ${f.unidad}</span></div></div>`).join('')}
+      </div>
+      <div class="overflow-x-auto rounded-xl border border-neutral-200"><table class="w-full text-[11px]"><thead><tr class="border-b border-neutral-200 text-left text-neutral-500"><th class="p-2">Insumo</th><th class="p-2">Teórico</th><th class="p-2">Real</th><th class="p-2">Diferencia</th><th class="p-2">Valor</th></tr></thead><tbody>
+        ${R.filas.map((f) => { const alto = f.difPct != null && Math.abs(f.difPct) > 15; return `<tr class="border-b border-neutral-100"><td class="p-2 font-medium">${f.nombre}</td><td class="p-2">${f.teo.toFixed(1).replace('.', ',')}</td><td class="p-2">${f.real.toFixed(1).replace('.', ',')}</td><td class="p-2 ${alto ? 'text-rojo font-medium' : ''}">${f.dif >= 0 ? '+' : ''}${f.dif.toFixed(1).replace('.', ',')}${f.difPct != null ? ' (' + f.difPct.toFixed(0) + ' %)' : ''}</td><td class="p-2 ${f.valor > 0 ? 'text-rojo' : 'text-verde'}">${fmtCLP(f.valor)}</td></tr>`; }).join('')}
+      </tbody></table></div>
+      <p class="mt-2 text-[10.5px] text-neutral-400">Una diferencia sobre 15 % se marca en rojo: puede ser merma, sobreporcionado, compras para otros usos o registros pendientes. Valor positivo = se gastó más de lo esperado.</p>`}`;
+  }
+
+  const tabs = [['producir', 'Qué producir'], ['ranking', 'Costo y calificación'], ['real', 'Real vs. teórico']];
+  app.innerHTML = shell('Análisis de producción', `
+    <div class="p-4">
+      ${D.errorTablas ? `<p class="mb-3 rounded-lg border border-rojo p-3 text-xs text-rojo">No se pudo leer el centro de costos (${D.errorTablas.message}).</p>` : ''}
+      ${D.avisoSql18 ? '<p class="mb-3 rounded-lg border border-amarillo p-3 text-xs text-amarillo">Ejecuta <b>18_costos_avanzados.sql</b> en Supabase para completar estos análisis.</p>' : ''}
+      <div class="mb-2 flex justify-end"><button id="btn-pdf-costos" class="rounded-full border border-neutral-200 px-3 py-1 text-[11px] text-neutral-600">📄 Informe PDF</button></div>
+      <div class="mb-3 flex gap-1.5 overflow-x-auto">${tabs.map(([k, t]) => `<button data-tab-analisis="${k}" class="whitespace-nowrap rounded-full px-3 py-1.5 text-xs ${pestanaAnalisis === k ? 'bg-marca text-white font-medium' : 'border border-neutral-200 text-neutral-500'}">${t}</button>`).join('')}</div>
+      ${cuerpo}
+    </div>`);
+  montarShell();
+  document.getElementById('btn-pdf-costos')?.addEventListener('click', descargarInformeCostosPdf);
+  document.querySelectorAll('[data-tab-analisis]').forEach((b) => b.addEventListener('click', async () => { pestanaAnalisis = b.dataset.tabAnalisis; await vistaAnalisis(); }));
+  document.getElementById('sel-semana-analisis')?.addEventListener('change', async (e) => { semanaAnalisis = e.target.value; await vistaAnalisis(); });
+}
+
+async function descargarInformeCostosPdf() {
+  const semana = semanaActual();
+  const D = await cargarDatosCostos(semana);
+  const M = crearModeloCostos(D);
+  const fecha = new Date().toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' });
+  const filas = D.recetas.map((r) => ({ r, c: M.costosReceta(r) })).sort((a, b) => b.c.pctCosto - a.c.pctCosto);
+  const maxPct = Math.max(D.cfg.tope_costo_pct * 1.3, ...filas.map((x) => x.c.pctCosto), 1);
+  const R = analizarRanking(D, M), L = analizarProducir(D, M).slice(0, 5), RT = analizarRealTeorico(D, M, semana);
+  const cambios = D.historial.filter((h) => h.anterior != null).slice(-10).reverse();
+  const barra = (pct, color) => `<div style="background:#eee;height:10px;border-radius:3px"><div style="width:${Math.max(2, Math.min(100, pct))}%;height:10px;border-radius:3px;background:${color}"></div></div>`;
+  const tabla = (cab, rows) => `<table><thead><tr>${cab.map((c) => `<th>${c}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  const html = `
+    <h1>Informe de costos de producción</h1>
+    <p class="sub">Mercato Valdivia · ${fecha}</p>
+    <p class="sub">Parámetros: venta ${fmtCLP(D.cfg.precio_venta_jarra)} por jarra · tope de costo ${fmtPct(D.cfg.tope_costo_pct)} · ${D.cfg.porciones_lote} porciones y ${D.cfg.jarras_lote} jarras por lote.</p>
+    <h2>1. Costo y margen por mezcla</h2>
+    ${filas.length ? tabla(['Mezcla', 'Por porción', 'Por bloque', 'Por jarra', 'Venta', 'Margen', 'Costo %', ''], filas.map((x) => [`<b>${M.nombreReceta(x.r)}</b>`, fmtCLP1(x.c.porcion), fmtCLP1(x.c.bloque), fmtCLP(x.c.jarra), fmtCLP(x.c.venta), `${fmtCLP(x.c.margen)} (${fmtPct(x.c.margenPct)})`, fmtPct(x.c.pctCosto), barra(x.c.pctCosto / maxPct * 100, x.c.pctCosto > D.cfg.tope_costo_pct ? '#E24B4A' : '#1D9E75')])) : '<p>Sin mezclas cargadas.</p>'}
+    <h2>2. Qué conviene producir primero</h2>
+    ${L.length ? tabla(['Mezcla', 'Bloques existentes', 'Pulpa en stock', 'Calificación', 'Costo/jarra'], L.map((x) => [x.nombre, x.existentes, x.sinPulpa ? 'sin stock' : x.stockPulpa, x.nota != null ? x.nota.toFixed(1).replace('.', ',') + ' ★' : '—', fmtCLP(x.jarra)])) : '<p>Sin datos.</p>'}
+    <h2>3. Costo y calificación del público</h2>
+    ${R.filas.length ? tabla(['Mezcla', 'Nota', 'Lotes', 'Costo/jarra', 'Lectura'], R.filas.map((f) => [f.nombre, f.nota.toFixed(1).replace('.', ',') + ' ★', f.veces, f.jarra != null ? fmtCLP(f.jarra) : '—', `<span style="color:${f.veredicto.c}">${f.veredicto.t}</span>`])) : '<p>Aún no hay lotes calificados.</p>'}
+    <h2>4. Real vs. teórico (semana del ${new Date(semana + 'T12:00:00').toLocaleDateString('es-CL', { day: '2-digit', month: 'long' })})</h2>
+    ${RT.filas.length ? tabla(['Insumo', 'Teórico', 'Real', 'Diferencia', 'Valor'], RT.filas.map((f) => [`${f.tipo} · ${f.nombre}`, `${f.teo.toFixed(1).replace('.', ',')} ${f.unidad}`, `${f.real.toFixed(1).replace('.', ',')} ${f.unidad}`, `${f.dif >= 0 ? '+' : ''}${f.dif.toFixed(1).replace('.', ',')}${f.difPct != null ? ' (' + f.difPct.toFixed(0) + ' %)' : ''}`, fmtCLP(f.valor)])) : '<p>Sin datos de la semana.</p>'}
+    <h2>5. Últimos cambios de precio</h2>
+    ${cambios.length ? tabla(['Fecha', 'Insumo', 'Antes', 'Ahora', 'Variación'], cambios.map((h) => [new Date(h.cambiado_en).toLocaleDateString('es-CL'), `${h.tipo === 'pulpa' ? 'Pulpa' : 'Fruta'} · ${h.nombre}`, fmtCLP(h.anterior), fmtCLP(h.precio_kg), Number(h.anterior) ? ((h.precio_kg / h.anterior - 1) * 100).toFixed(1).replace('.', ',') + ' %' : '—'])) : '<p>Aún no hay cambios de precio registrados.</p>'}
+    <p class="nota">Los costos consideran solo pulpa, fruta y otros ingredientes cargados en cada mezcla; no incluyen mano de obra ni gastos operacionales.</p>`;
+  const ventana = window.open('', '_blank');
+  if (!ventana) return alert('El navegador bloqueó la ventana del informe. Permite las ventanas emergentes para este sitio e inténtalo de nuevo.');
+  ventana.document.write(`<html><head><title>Informe de costos — ${fecha}</title><style>
+    body{font-family:Arial,sans-serif;padding:24px;color:#222;max-width:900px;margin:auto}
+    h1{font-size:20px;margin:0}h2{font-size:14px;margin:22px 0 6px;border-bottom:1px solid #ddd;padding-bottom:4px}
+    .sub{font-size:11px;color:#666;margin:2px 0}.nota{font-size:10px;color:#888;margin-top:18px}
+    table{width:100%;border-collapse:collapse;font-size:11px}th{text-align:left;background:#f3f3f3;padding:5px;border:1px solid #ddd}td{padding:5px;border:1px solid #eee;vertical-align:middle}
+    @media print{body{padding:10px}h2{break-after:avoid}tr{break-inside:avoid}}
+  </style></head><body>${html}</body></html>`);
+  ventana.document.close();
+  ventana.focus();
+  setTimeout(() => ventana.print(), 400);
 }
 
 // ---------------- Inicio ----------------
@@ -1957,6 +2345,7 @@ function abrirModalUnirLotes(destino, candidatos, alTerminar) {
       preparado_por: [...new Set(todos.flatMap((l) => l.preparado_por || []))]
     };
     if (todos.some((l) => l.estado === 'en_uso')) cambios.estado = 'en_uso';
+    await supabase.rpc('unir_costos_lotes', { p_destino: destino.id, p_origenes: ids.map(Number) }); // costo ponderado (si el SQL 18 está instalado)
     const { error } = await supabase.from('produccion_mezclas').update(cambios).eq('id', destino.id);
     if (error) return alert('No se pudo unir: ' + error.message);
     const { error: e1 } = await supabase.from('produccion_movimientos').delete().in('produccion_id', ids);
@@ -2157,6 +2546,7 @@ function montarPanelEnUso(enCamara) {
     }
 
     await supabase.from('produccion_movimientos').insert([{ produccion_id: nuevoLote.id, tipo: 'traslado_salon', responsable: usuarioActual.nombre }]);
+    await supabase.rpc('copiar_costo_lote', { p_origen: loteId, p_nuevo: nuevoLote.id }); // hereda el costo congelado (si el SQL 18 está instalado)
     await vistaProduccion();
   });
 
