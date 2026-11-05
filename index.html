@@ -540,12 +540,18 @@ function shell(titulo, contenidoHtml) {
       <p class="flex-1 text-sm font-medium text-marca">${titulo}</p>
       <button id="btn-config" aria-label="Configuración" class="p-1 text-neutral-500"><i class="ti ti-settings"></i>⚙</button>
       <button id="btn-logout" aria-label="Cerrar sesión" class="p-1 text-xs text-neutral-400">Salir</button>
+      <div class="relative">
+        <button id="btn-menu" aria-label="Menú" class="p-1 text-lg leading-none text-neutral-500">☰</button>
+        <div id="menu-desplegable" class="absolute right-0 top-full z-40 mt-2 hidden w-52 rounded-xl border border-neutral-200 bg-white py-1 shadow-lg">
+          <button data-menu="historial" class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-neutral-700">⭐ Historial de sabores</button>
+          ${(usuarioActual.rol === 'admin' || usuarioActual.rol === 'jefe') ? `<button data-menu="costos" class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-neutral-700">💰 Centro de costos</button>` : ''}
+        </div>
+      </div>
     </header>
     <div id="contenido" class="pb-16">${contenidoHtml}</div>
     <nav class="fixed inset-x-0 bottom-0 flex border-t border-neutral-200 bg-white">
       ${navBoton('diario', 'Diario')}
       ${navBoton('produccion', 'Producción')}
-      ${navBoton('historial', 'Historial')}
       ${navBoton('resumen', 'Resumen')}
       ${navBoton('global', 'Reporte')}
     </nav>
@@ -567,6 +573,12 @@ function montarShell() {
     await render();
   });
   document.getElementById('btn-config')?.addEventListener('click', () => cambiarPantalla('configuracion'));
+  const menu = document.getElementById('menu-desplegable');
+  document.getElementById('btn-menu')?.addEventListener('click', (e) => { e.stopPropagation(); menu.classList.toggle('hidden'); });
+  document.addEventListener('click', () => menu?.classList.add('hidden'), { once: true });
+  document.querySelectorAll('[data-menu]').forEach((btn) => {
+    btn.addEventListener('click', () => cambiarPantalla(btn.dataset.menu));
+  });
   document.querySelectorAll('[data-nav]').forEach((btn) => {
     btn.addEventListener('click', () => cambiarPantalla(btn.dataset.nav));
   });
@@ -594,6 +606,155 @@ async function renderPantalla() {
   else if (pantalla === 'configuracion') await vistaConfiguracion();
   else if (pantalla === 'usuarios') await vistaUsuarios();
   else if (pantalla === 'informe_mensual') await vistaInformeMensual();
+  else if (pantalla === 'costos') await vistaCentroCostos();
+}
+
+
+// ---------------- Centro de costos ----------------
+
+let pestanaCostos = 'mezclas';
+
+function numCosto(v) {
+  const n = Number(String(v ?? '').replace(',', '.').trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
+async function vistaCentroCostos() {
+  const esAdmin = usuarioActual.rol === 'admin';
+  const clp = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(Math.round(n || 0));
+  const clp1 = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 1 }).format(n || 0);
+
+  const [rp, rf, rr, rl] = await Promise.all([
+    supabase.from('costos_pulpas').select('*').order('nombre'),
+    supabase.from('costos_frutas').select('*').order('nombre'),
+    supabase.from('costos_recetas').select('*').order('pulpa'),
+    supabase.from('produccion_mezclas').select('*').neq('estado', 'terminado').order('fecha_ingreso')
+  ]);
+  const errTablas = rp.error || rf.error || rr.error;
+  const pulpas = rp.data || [], frutas = rf.data || [], recetas = rr.data || [], lotes = rl.data || [];
+
+  const norm = (x) => String(x || '').trim().toLowerCase();
+  const pulpaDe = (n) => pulpas.find((p) => norm(p.nombre) === norm(n));
+  const frutaDe = (n) => frutas.find((f) => norm(f.nombre) === norm(n));
+
+  const costoPulpaPorcion = (p) => (p && p.porciones_por_kg > 0) ? p.precio_kg / p.porciones_por_kg : 0;
+  const gramosUtiles = (f) => Math.max(0, 1000 - (f?.descarte_g || 0));
+  const costoGramoUtil = (f) => (f && gramosUtiles(f) > 0) ? f.precio_kg / gramosUtiles(f) : 0;
+  function costosReceta(r) {
+    const pulpa = costoPulpaPorcion(pulpaDe(r.pulpa));
+    const fruta = r.gramos_fruta_porcion * costoGramoUtil(frutaDe(r.fruta));
+    const porcion = pulpa + fruta + (r.otros_costos_porcion || 0);
+    return { pulpa, fruta, porcion, bloque: porcion * (r.porciones_por_bloque || 1) };
+  }
+  const totalBloques = (l) => [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].reduce((a, b) => a + (Number(b) || 0), 0);
+
+  const inp = (campo, valor, ph, ancho = 'w-full') => `<input type="text" inputmode="decimal" data-campo="${campo}" value="${valor ?? ''}" placeholder="${ph}" class="${ancho} !h-8 !px-2 text-xs" ${esAdmin ? '' : 'disabled'} />`;
+  const txt = (campo, valor, ph, lista) => `<input type="text" data-campo="${campo}" value="${valor ?? ''}" placeholder="${ph}" ${lista ? `list="${lista}"` : ''} class="w-full !h-8 !px-2 text-xs" ${esAdmin ? '' : 'disabled'} />`;
+  const acciones = (nueva) => esAdmin ? `<div class="mt-2 flex justify-end gap-2">
+      ${nueva ? '' : '<button class="btn-borrar-costo rounded-lg border border-rojo px-3 py-1 text-[11px] text-rojo">Borrar</button>'}
+      <button class="btn-guardar-costo rounded-lg bg-marca px-3 py-1 text-[11px] font-medium text-white">${nueva ? 'Agregar' : 'Guardar'}</button></div>` : '';
+  const caja = (tabla, clave, cuerpo, resumen, nueva) => `<div data-fila data-tabla="${tabla}" data-clave="${clave ?? ''}" class="mb-2 rounded-xl border ${nueva ? 'border-dashed' : ''} border-neutral-200 p-3">${cuerpo}${resumen ? `<p class="mt-2 text-[11px] text-neutral-500">${resumen}</p>` : ''}${acciones(nueva)}</div>`;
+  const lab = (t, c) => `<div><p class="mb-0.5 text-[10px] text-neutral-400">${t}</p>${c}</div>`;
+
+  function seccionPulpas() {
+    const fila = (p, nueva) => caja('costos_pulpas', nueva ? '' : p.nombre,
+      `<div class="grid grid-cols-3 gap-2">${lab('Pulpa', nueva ? txt('nombre', '', 'ej. Mango') : `<p class="pt-1.5 text-xs font-medium">${p.nombre}</p>`)}${lab('$ por kilo', inp('precio_kg', p?.precio_kg, '0'))}${lab('Porciones por kilo', inp('porciones_por_kg', p?.porciones_por_kg ?? 12, '12'))}</div>`,
+      nueva ? '' : `Costo por porción: <b>${clp1(costoPulpaPorcion(p))}</b>`, nueva);
+    return pulpas.map((p) => fila(p, false)).join('') + (esAdmin ? `<p class="mb-1 mt-3 text-[11px] text-neutral-400">Agregar pulpa</p>` + fila(null, true) : '');
+  }
+
+  function seccionFrutas() {
+    const fila = (f, nueva) => caja('costos_frutas', nueva ? '' : f.nombre,
+      `<div class="grid grid-cols-2 gap-2">${lab('Fruta', nueva ? txt('nombre', '', 'ej. Durazno') : `<p class="pt-1.5 text-xs font-medium">${f.nombre}</p>`)}${lab('$ por kilo', inp('precio_kg', f?.precio_kg, '0'))}${lab('Unidades por kilo', inp('unidades_por_kg', f?.unidades_por_kg ?? 1, 'ej. 8'))}${lab('Gramos descartables por kilo', inp('descarte_g', f?.descarte_g ?? 0, 'ej. 150'))}</div>`,
+      nueva ? '' : `Útil: <b>${gramosUtiles(f)} g/kg</b> · ${clp1(costoGramoUtil(f))} por gramo útil · ${f.unidades_por_kg > 0 ? Math.round(gramosUtiles(f) / f.unidades_por_kg) : 0} g útiles por unidad · ${clp(f.unidades_por_kg > 0 ? f.precio_kg / f.unidades_por_kg : 0)} por unidad`, nueva);
+    return frutas.map((f) => fila(f, false)).join('') + (esAdmin ? `<p class="mb-1 mt-3 text-[11px] text-neutral-400">Agregar fruta</p>` + fila(null, true) : '');
+  }
+
+  function seccionMezclas() {
+    const fila = (r, nueva) => {
+      const c = nueva ? null : costosReceta(r);
+      const gUnidad = r && frutaDe(r.fruta) && frutaDe(r.fruta).unidades_por_kg > 0 ? gramosUtiles(frutaDe(r.fruta)) / frutaDe(r.fruta).unidades_por_kg : 0;
+      return caja('costos_recetas', nueva ? '' : r.id,
+        `<div class="grid grid-cols-2 gap-2">${lab('Pulpa', txt('pulpa', r?.pulpa, 'ej. Mango', 'lista-costos-pulpas'))}${lab('Fruta (opcional)', txt('fruta', r?.fruta, 'ej. Durazno', 'lista-costos-frutas'))}${lab('Gramos de fruta por porción', inp('gramos_fruta_porcion', r?.gramos_fruta_porcion, '0'))}${lab('Porciones por bloque', inp('porciones_por_bloque', r?.porciones_por_bloque ?? 1, '1'))}${lab('Otros costos por porción ($)', inp('otros_costos_porcion', r?.otros_costos_porcion ?? 0, '0'))}</div>`,
+        nueva ? '' : `<span class="text-neutral-700"><b>${r.pulpa}${r.fruta ? ' + ' + r.fruta : ''}</b></span><br>
+          Pulpa ${clp1(c.pulpa)} + fruta ${clp1(c.fruta)}${r.otros_costos_porcion ? ' + otros ' + clp1(r.otros_costos_porcion) : ''}${gUnidad ? ` (≈ ${(r.gramos_fruta_porcion / gUnidad).toFixed(2)} unid. de fruta)` : ''}<br>
+          Por unidad (porción): <b>${clp1(c.porcion)}</b> · Por bloque: <b>${clp1(c.bloque)}</b>`, nueva);
+    };
+    return `<datalist id="lista-costos-pulpas">${pulpas.map((p) => `<option>${p.nombre}</option>`).join('')}</datalist>
+      <datalist id="lista-costos-frutas">${frutas.map((f) => `<option>${f.nombre}</option>`).join('')}</datalist>
+      ${recetas.map((r) => fila(r, false)).join('') || '<p class="mb-2 text-xs text-neutral-400">Aún no hay mezclas. Carga primero pulpas y frutas.</p>'}
+      ${esAdmin ? `<p class="mb-1 mt-3 text-[11px] text-neutral-400">Agregar mezcla</p>` + fila(null, true) : ''}`;
+  }
+
+  function seccionProducciones() {
+    let total = 0, sinReceta = 0;
+    const filas = lotes.map((l) => {
+      const r = recetas.find((x) => norm(x.pulpa) === norm(l.sabor) && norm(x.fruta) === norm(l.complemento));
+      const bloques = totalBloques(l);
+      if (!r) { sinReceta++; return `<div class="flex items-center justify-between border-b border-neutral-100 py-2 text-xs"><span>${l.sabor} + ${l.complemento} <span class="text-neutral-400">· ${bloques} bloques</span></span><span class="text-neutral-400">sin receta</span></div>`; }
+      const c = costosReceta(r);
+      const sub = bloques * c.bloque;
+      total += sub;
+      return `<div class="flex items-center justify-between border-b border-neutral-100 py-2 text-xs"><span>${l.sabor} + ${l.complemento}<br><span class="text-[10.5px] text-neutral-400">${bloques} bloques × ${clp1(c.bloque)} · ${l.ubicacion === 'SALON' ? 'Salón' : 'Cámara'}</span></span><b>${clp(sub)}</b></div>`;
+    }).join('');
+    return `<div class="mb-3 rounded-xl border border-neutral-200 p-3"><p class="text-[11px] text-neutral-500">Costo total de lo producido (en cámara y salón)</p><p class="text-xl font-medium text-marca">${clp(total)}</p>${sinReceta ? `<p class="text-[10.5px] text-neutral-400">${sinReceta} lote(s) sin receta: crea la mezcla con la misma pulpa y fruta.</p>` : ''}</div>` + (filas || '<p class="text-xs text-neutral-400">No hay producciones activas.</p>');
+  }
+
+  const pestanas = [['mezclas', 'Mezclas'], ['pulpas', 'Pulpas'], ['frutas', 'Frutas'], ['producciones', 'Producidas']];
+  const cuerpo = pestanaCostos === 'pulpas' ? seccionPulpas() : pestanaCostos === 'frutas' ? seccionFrutas() : pestanaCostos === 'producciones' ? seccionProducciones() : seccionMezclas();
+
+  app.innerHTML = shell('Centro de costos', `
+    <div class="p-4">
+      ${errTablas ? `<p class="mb-3 rounded-lg border border-rojo p-3 text-xs text-rojo">No se pudo leer el centro de costos (${errTablas.message}). ¿Ejecutaste 16_centro_de_costos.sql en Supabase?</p>` : ''}
+      <div class="mb-3 flex gap-1.5 overflow-x-auto">
+        ${pestanas.map(([k, t]) => `<button data-pestana="${k}" class="btn-pestana-costos whitespace-nowrap rounded-full px-3 py-1.5 text-xs ${pestanaCostos === k ? 'bg-marca text-white font-medium' : 'border border-neutral-200 text-neutral-500'}">${t}</button>`).join('')}
+      </div>
+      ${pestanaCostos === 'mezclas' ? '<p class="mb-3 text-[10.5px] text-neutral-400">Cada kilo de pulpa rinde las porciones indicadas en la pestaña Pulpas (12 por defecto). La fruta se calcula sobre gramos útiles (kilo menos descarte).</p>' : ''}
+      ${cuerpo}
+      ${!esAdmin ? '<p class="mt-3 text-[10.5px] text-neutral-400">Solo lectura. Únicamente el administrador puede editar los costos.</p>' : ''}
+    </div>`);
+  montarShell();
+
+  document.querySelectorAll('.btn-pestana-costos').forEach((b) => b.addEventListener('click', async () => { pestanaCostos = b.dataset.pestana; await vistaCentroCostos(); }));
+  if (!esAdmin) return;
+
+  const camposNum = { costos_pulpas: ['precio_kg', 'porciones_por_kg'], costos_frutas: ['precio_kg', 'unidades_por_kg', 'descarte_g'], costos_recetas: ['gramos_fruta_porcion', 'porciones_por_bloque', 'otros_costos_porcion'] };
+  const pk = { costos_pulpas: 'nombre', costos_frutas: 'nombre', costos_recetas: 'id' };
+
+  document.querySelectorAll('.btn-guardar-costo').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const fila = btn.closest('[data-fila]');
+      const tabla = fila.dataset.tabla, clave = fila.dataset.clave;
+      const datos = {};
+      fila.querySelectorAll('input[data-campo]').forEach((i) => {
+        const c = i.dataset.campo;
+        datos[c] = (camposNum[tabla] || []).includes(c) ? numCosto(i.value) : i.value.trim();
+      });
+      datos.updated_at = new Date().toISOString();
+      let error;
+      if (tabla === 'costos_recetas') {
+        if (!datos.pulpa) return alert('Indica la pulpa de la mezcla.');
+        if (datos.fruta === '') datos.fruta = null;
+        ({ error } = clave ? await supabase.from(tabla).update(datos).eq('id', clave) : await supabase.from(tabla).insert([datos]));
+      } else {
+        if (!clave && !datos.nombre) return alert('Escribe un nombre.');
+        if (clave) datos.nombre = clave;
+        ({ error } = await supabase.from(tabla).upsert([datos], { onConflict: 'nombre' }));
+      }
+      if (error) return alert('No se pudo guardar: ' + error.message);
+      await vistaCentroCostos();
+    });
+  });
+
+  document.querySelectorAll('.btn-borrar-costo').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const fila = btn.closest('[data-fila]');
+      if (!confirm('¿Borrar este registro?')) return;
+      const { error } = await supabase.from(fila.dataset.tabla).delete().eq(pk[fila.dataset.tabla], fila.dataset.clave);
+      if (error) return alert('No se pudo borrar: ' + error.message);
+      await vistaCentroCostos();
+    });
+  });
 }
 
 // ---------------- Inicio ----------------
@@ -627,7 +788,8 @@ async function vistaInicio() {
     { clave: 'produccion', etiqueta: 'Producción', emoji: '🏭' },
     { clave: 'historial', etiqueta: 'Historial', emoji: '⭐' },
     { clave: 'resumen', etiqueta: 'Resumen', emoji: '📊' },
-    { clave: 'global', etiqueta: 'Reporte', emoji: '📈' }
+    { clave: 'global', etiqueta: 'Reporte', emoji: '📈' },
+    ...((usuarioActual.rol === 'admin' || usuarioActual.rol === 'jefe') ? [{ clave: 'costos', etiqueta: 'Costos', emoji: '💰' }] : [])
   ];
 
   app.innerHTML = shell('Inicio', `
