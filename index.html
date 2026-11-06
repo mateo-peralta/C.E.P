@@ -2432,9 +2432,9 @@ async function vistaProduccion() {
     const m = new Map();
     activos.forEach((l) => {
       const k = `${String(l.sabor).trim().toLowerCase()}|${String(l.complemento).trim().toLowerCase()}`;
-      if (!m.has(k)) m.set(k, { nombre: `${l.sabor} + ${l.complemento}`, lotes: 0, bloques: 0, valor: 0, bCamara: 0, vCamara: 0, sinCosto: 0, unidades: [], ppb: 1 });
+      if (!m.has(k)) m.set(k, { nombre: `${l.sabor} + ${l.complemento}`, lotes: 0, bloques: 0, valor: 0, bCamara: 0, vCamara: 0, sinCosto: 0, unidades: [], ppb: 1, receta: null });
       const e = m.get(k), v = valorLote(l, CP);
-      e.lotes += 1; e.bloques += v.bloques; e.valor += v.valor; e.unidades.push(...unidadesDe(l)); if (!v.sinCosto) e.ppb = v.ppb;
+      e.lotes += 1; e.bloques += v.bloques; e.valor += v.valor; e.unidades.push(...unidadesDe(l)); if (!v.sinCosto) e.ppb = v.ppb; if (!e.receta) e.receta = CP.M.recetaDeLote(CP.recetas, l) || null;
       if (l.ubicacion === 'CAMARA') { e.bCamara += v.bloques; e.vCamara += v.valor; }
       if (v.sinCosto) e.sinCosto += 1;
     });
@@ -2517,6 +2517,7 @@ async function vistaProduccion() {
             <div class="rounded-lg bg-neutral-100 p-1.5"><p class="text-[9.5px] text-neutral-500">Paquete${tipico ? ' de ' + tipico.tam : ''}</p><p class="text-xs font-semibold">${tipico ? fmtCLP(tipico.valor) : '—'}</p></div>
             <div class="rounded-lg bg-marca-light p-1.5"><p class="text-[9.5px] text-marca">Total</p><p class="text-xs font-semibold text-marca">${fmtCLP(c.valor)}</p></div>
           </div>
+          ${(() => { if (!c.receta) return ''; const k = CP.M.costosReceta(c.receta), f = c.receta.porciones_por_bloque || 1; const otros = (c.receta.otros_costos_porcion || 0) * f; return `<p class="mt-1.5 text-[10.5px] text-neutral-500">Cada bloque incluye (receta actual): pulpa <b>${fmtCLP1(k.pulpa * f)}</b> + fruta <b>${fmtCLP1(k.fruta * f)}</b>${otros ? ' + otros <b>' + fmtCLP1(otros) + '</b>' : ''} = ${fmtCLP1(k.bloque)}</p>`; })()}
           <p class="mt-1.5 text-[10.5px] text-neutral-500">${c.bloques} bloques en ${c.unidades.length} paquete${c.unidades.length === 1 ? '' : 's'}: ${paq.map((q) => `${q.cant} × ${q.tam} bl (${fmtCLP(q.valor)} c/u)`).join(' · ')}</p>
           <p class="text-[10.5px] text-neutral-400">En cámara: ${fmtCLP(c.vCamara)}${c.sinCosto ? ` · ${c.sinCosto} lote(s) sin costo` : ''}</p>`}
         </div>`;
