@@ -808,8 +808,16 @@ function valorLote(l, C) {
   const frozen = C.costosLote.get(l.id);
   const r = C.M.recetaDeLote(C.recetas, l);
   const costoBloque = frozen != null ? frozen : (r ? C.M.costosReceta(r).bloque : null);
-  if (costoBloque == null) return { bloques, costoBloque: null, valor: 0, congelado: false, sinCosto: true };
-  return { bloques, costoBloque, valor: bloques * costoBloque, congelado: frozen != null, sinCosto: false };
+  const ppb = (r && r.porciones_por_bloque) || 1;
+  if (costoBloque == null) return { bloques, costoBloque: null, porcion: null, ppb, valor: 0, congelado: false, sinCosto: true };
+  return { bloques, costoBloque, porcion: costoBloque / ppb, ppb, valor: bloques * costoBloque, congelado: frozen != null, sinCosto: false };
+}
+
+/** Agrupa las unidades (paquetes) por tamaño: [{ tam: 21, cant: 4, valor: 7395 }, ...] */
+function resumenPaquetes(unidades, costoBloque) {
+  const m = new Map();
+  unidades.forEach((u) => m.set(u, (m.get(u) || 0) + 1));
+  return [...m.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0]).map(([tam, cant]) => ({ tam, cant, valor: tam * costoBloque }));
 }
 
 const fmtCLP = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(Math.round(n || 0));
@@ -2424,9 +2432,9 @@ async function vistaProduccion() {
     const m = new Map();
     activos.forEach((l) => {
       const k = `${String(l.sabor).trim().toLowerCase()}|${String(l.complemento).trim().toLowerCase()}`;
-      if (!m.has(k)) m.set(k, { nombre: `${l.sabor} + ${l.complemento}`, lotes: 0, bloques: 0, valor: 0, bCamara: 0, vCamara: 0, sinCosto: 0 });
+      if (!m.has(k)) m.set(k, { nombre: `${l.sabor} + ${l.complemento}`, lotes: 0, bloques: 0, valor: 0, bCamara: 0, vCamara: 0, sinCosto: 0, unidades: [], ppb: 1 });
       const e = m.get(k), v = valorLote(l, CP);
-      e.lotes += 1; e.bloques += v.bloques; e.valor += v.valor;
+      e.lotes += 1; e.bloques += v.bloques; e.valor += v.valor; e.unidades.push(...unidadesDe(l)); if (!v.sinCosto) e.ppb = v.ppb;
       if (l.ubicacion === 'CAMARA') { e.bCamara += v.bloques; e.vCamara += v.valor; }
       if (v.sinCosto) e.sinCosto += 1;
     });
@@ -2451,7 +2459,7 @@ async function vistaProduccion() {
     return `<div class="flex items-center justify-between border-b border-neutral-100 py-2">
       <div>
         <p class="text-sm font-medium ${existe ? '' : 'line-through opacity-50'}">${l.sabor} + ${l.complemento} ${l.estado === 'proxima' ? '<span class="ml-1 rounded-full bg-marca-light px-2 py-0.5 text-[10px] text-marca">próxima</span>' : ''}</p>
-        <p class="text-[11px] text-neutral-400">Bloques: ${bloques} · ${fecha}${CP ? (() => { const v = valorLote(l, CP); return v.sinCosto ? ' · sin costo' : `<br>${v.bloques} bloques × ${fmtCLP1(v.costoBloque)} = <b class="text-marca">${fmtCLP(v.valor)}</b>`; })() : ''}</p>
+        <p class="text-[11px] text-neutral-400">Bloques: ${bloques} · ${fecha}${CP ? (() => { const v = valorLote(l, CP); return v.sinCosto ? ' · sin costo' : `<br>Porción ${fmtCLP1(v.porcion)} · Bloque ${fmtCLP1(v.costoBloque)}<br>${resumenPaquetes(unidadesDe(l), v.costoBloque).map((q) => `${q.cant > 1 ? q.cant + ' × ' : ''}paquete de ${q.tam} = <b>${fmtCLP(q.valor)}</b>${q.cant > 1 ? ' c/u' : ''}`).join(' · ')}<br>Total del lote: ${v.bloques} bloques = <b class="text-marca">${fmtCLP(v.valor)}</b>`; })() : ''}</p>
         <label class="mt-1 flex items-center gap-1 text-[11px] text-neutral-500 ${permitido ? 'cursor-pointer' : ''}">
           <input type="checkbox" class="chk-lote h-4 w-4" data-lote-id="${l.id}" data-campo="existe" ${existe ? 'checked' : ''} ${permitido ? '' : 'disabled'} />Existe
         </label>
@@ -2496,17 +2504,24 @@ async function vistaProduccion() {
     ${CP ? `
     <section class="px-4 pt-5">
       <p class="mb-2 text-xs font-medium text-neutral-500">💰 Valor por mezcla (cámara + salón)</p>
-      ${combos.length ? `
-      <div class="overflow-x-auto rounded-xl border border-neutral-200">
-        <table class="w-full text-[11px]">
-          <thead><tr class="text-left text-neutral-500"><th class="p-2">Mezcla</th><th class="p-2 text-right">Bloques</th><th class="p-2 text-right">$ / bloque</th><th class="p-2 text-right">Total</th></tr></thead>
-          <tbody>
-            ${combos.map((c) => `<tr class="border-t border-neutral-100"><td class="p-2 font-medium">${c.nombre}<br><span class="font-normal text-neutral-400">${c.lotes} lote${c.lotes === 1 ? '' : 's'} · cámara ${fmtCLP(c.vCamara)}${c.sinCosto ? ' · sin costo' : ''}</span></td><td class="p-2 text-right">${c.bloques}</td><td class="p-2 text-right">${c.bloques && !c.sinCosto ? fmtCLP1(c.valor / c.bloques) : '—'}</td><td class="p-2 text-right font-medium">${fmtCLP(c.valor)}</td></tr>`).join('')}
-            <tr class="border-t-2 border-neutral-300 font-medium"><td class="p-2">Total producción</td><td class="p-2 text-right">${combos.reduce((a, c) => a + c.bloques, 0)}</td><td class="p-2 text-right">${combos.reduce((a, c) => a + c.bloques, 0) ? fmtCLP1(combos.reduce((a, c) => a + c.valor, 0) / combos.reduce((a, c) => a + c.bloques, 0)) : '—'}</td><td class="p-2 text-right text-marca">${fmtCLP(combos.reduce((a, c) => a + c.valor, 0))}</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p class="mt-1 text-[10.5px] text-neutral-400">El $/bloque de cada mezcla es el promedio ponderado de sus lotes (cada lote conserva su costo del día de producción).</p>` : '<p class="text-xs text-neutral-400">— sin producciones —</p>'}
+      ${combos.length ? combos.map((c) => {
+        const cb = c.bloques && !c.sinCosto ? c.valor / c.bloques : null;
+        const paq = cb != null ? resumenPaquetes(c.unidades, cb) : [];
+        const tipico = paq[0];
+        return `<div class="mb-2 rounded-xl border border-neutral-200 p-3">
+          <div class="flex items-baseline justify-between"><p class="text-sm font-medium">${c.nombre}</p><p class="text-[10.5px] text-neutral-400">${c.lotes} lote${c.lotes === 1 ? '' : 's'}</p></div>
+          ${cb == null ? '<p class="mt-1 text-xs text-neutral-400">Sin receta de costo para esta mezcla.</p>' : `
+          <div class="mt-2 grid grid-cols-4 gap-1.5 text-center">
+            <div class="rounded-lg bg-neutral-100 p-1.5"><p class="text-[9.5px] text-neutral-500">Porción</p><p class="text-xs font-semibold">${fmtCLP1(cb / (c.ppb || 1))}</p></div>
+            <div class="rounded-lg bg-neutral-100 p-1.5"><p class="text-[9.5px] text-neutral-500">Bloque</p><p class="text-xs font-semibold">${fmtCLP1(cb)}</p></div>
+            <div class="rounded-lg bg-neutral-100 p-1.5"><p class="text-[9.5px] text-neutral-500">Paquete${tipico ? ' de ' + tipico.tam : ''}</p><p class="text-xs font-semibold">${tipico ? fmtCLP(tipico.valor) : '—'}</p></div>
+            <div class="rounded-lg bg-marca-light p-1.5"><p class="text-[9.5px] text-marca">Total</p><p class="text-xs font-semibold text-marca">${fmtCLP(c.valor)}</p></div>
+          </div>
+          <p class="mt-1.5 text-[10.5px] text-neutral-500">${c.bloques} bloques en ${c.unidades.length} paquete${c.unidades.length === 1 ? '' : 's'}: ${paq.map((q) => `${q.cant} × ${q.tam} bl (${fmtCLP(q.valor)} c/u)`).join(' · ')}</p>
+          <p class="text-[10.5px] text-neutral-400">En cámara: ${fmtCLP(c.vCamara)}${c.sinCosto ? ` · ${c.sinCosto} lote(s) sin costo` : ''}</p>`}
+        </div>`;
+      }).join('') + `<div class="flex items-center justify-between rounded-xl border border-marca p-3"><span class="text-xs font-medium">Total producción · ${combos.reduce((a, c) => a + c.bloques, 0)} bloques</span><b class="text-sm text-marca">${fmtCLP(combos.reduce((a, c) => a + c.valor, 0))}</b></div>
+      <p class="mt-1 text-[10.5px] text-neutral-400">Valores por mezcla = promedio ponderado de sus lotes (cada lote conserva el costo del día en que se elaboró). Paquete = una unidad del lote; porción = bloque ÷ porciones por bloque de la receta.</p>` : '<p class="text-xs text-neutral-400">— sin producciones —</p>'}
     </section>` : ''}
     <section class="px-4 pt-5">
       <button id="btn-ir-historial" class="flex w-full items-center justify-between rounded-xl border border-neutral-200 px-3 py-2.5 text-xs font-medium text-neutral-600">
