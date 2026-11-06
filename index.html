@@ -742,6 +742,9 @@ async function renderPantalla() {
 
 // ---------------- Modelo de costos compartido ----------------
 
+/** Fecha corta de un lote. Las fechas sin hora ('2026-11-03') se leen como día local para no mostrar el día anterior. */
+const fechaCortaLote = (f) => new Date(/^\d{4}-\d{2}-\d{2}$/.test(String(f)) ? f + 'T12:00:00' : f).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
+
 // ---- Unidades de un lote: 4 columnas históricas + lista ilimitada (bloques_extra) para la 5ª en adelante ----
 const unidadesDe = (l) => [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4, ...(Array.isArray(l.bloques_extra) ? l.bloques_extra : [])].map(Number).filter((n) => Number.isFinite(n) && n > 0);
 const totalBloquesDe = (l) => unidadesDe(l).reduce((a, n) => a + n, 0);
@@ -818,6 +821,48 @@ function resumenPaquetes(unidades, costoBloque) {
   const m = new Map();
   unidades.forEach((u) => m.set(u, (m.get(u) || 0) + 1));
   return [...m.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0]).map(([tam, cant]) => ({ tam, cant, valor: tam * costoBloque }));
+}
+
+/** Desglose de costos por mezcla (pulpa + fruta), con paquetes y detalle de lotes. Solo admin/jefe. */
+function renderDesgloseMezclas(lotes, C) {
+  const clpf = fmtCLP, clp1f = fmtCLP1;
+  const m = new Map();
+  lotes.forEach((l) => {
+    const k = `${String(l.sabor).trim().toLowerCase()}|${String(l.complemento).trim().toLowerCase()}`;
+    if (!m.has(k)) m.set(k, { nombre: `${l.sabor} + ${l.complemento}`, lotes: [], bloques: 0, valor: 0, vCamara: 0, sinCosto: 0, unidades: [], ppb: 1, receta: null });
+    const e = m.get(k), v = valorLote(l, C);
+    e.lotes.push({ l, v }); e.bloques += v.bloques; e.valor += v.valor; e.unidades.push(...unidadesDe(l));
+    if (l.ubicacion === 'CAMARA') e.vCamara += v.valor;
+    if (v.sinCosto) e.sinCosto += 1; else e.ppb = v.ppb;
+    if (!e.receta) e.receta = C.M.recetaDeLote(C.recetas, l) || null;
+  });
+  const combos = [...m.values()].sort((a, b) => b.valor - a.valor);
+  if (!combos.length) return '<p class="text-xs text-neutral-400">No hay producciones activas (cámara o salón) para desglosar.</p>';
+  const totalBloques = combos.reduce((a, c) => a + c.bloques, 0), totalValor = combos.reduce((a, c) => a + c.valor, 0);
+  const fecha = fechaCortaLote;
+  return `<p class="mb-3 text-[11px] text-neutral-500">Producciones activas (cámara + salón). Cada mezcla suma pulpa y fruta; el $ por bloque es el promedio ponderado de sus lotes (cada lote conserva el costo del día en que se elaboró).</p>` + combos.map((c) => {
+    const cb = c.bloques && !c.sinCosto ? c.valor / c.bloques : null;
+    const paq = cb != null ? resumenPaquetes(c.unidades, cb) : [];
+    const tipico = paq[0];
+    const k = c.receta ? C.M.costosReceta(c.receta) : null, f = c.receta ? (c.receta.porciones_por_bloque || 1) : 1;
+    const otros = c.receta ? (c.receta.otros_costos_porcion || 0) * f : 0;
+    return `<div class="mb-3 rounded-xl border border-neutral-200 p-3">
+      <div class="flex items-baseline justify-between"><p class="text-sm font-medium">${c.nombre}</p><p class="text-[10.5px] text-neutral-400">${c.lotes.length} lote${c.lotes.length === 1 ? '' : 's'}</p></div>
+      ${cb == null ? '<p class="mt-1 text-xs text-neutral-400">Sin receta de costo para esta mezcla. Créala en la pestaña Mezclas con la misma pulpa y fruta.</p>' : `
+      <div class="mt-2 grid grid-cols-4 gap-1.5 text-center">
+        <div class="rounded-lg bg-neutral-100 p-1.5"><p class="text-[9.5px] text-neutral-500">Porción</p><p class="text-xs font-semibold">${clp1f(cb / (c.ppb || 1))}</p></div>
+        <div class="rounded-lg bg-neutral-100 p-1.5"><p class="text-[9.5px] text-neutral-500">Bloque</p><p class="text-xs font-semibold">${clp1f(cb)}</p></div>
+        <div class="rounded-lg bg-neutral-100 p-1.5"><p class="text-[9.5px] text-neutral-500">Paquete${tipico ? ' de ' + tipico.tam : ''}</p><p class="text-xs font-semibold">${tipico ? clpf(tipico.valor) : '—'}</p></div>
+        <div class="rounded-lg bg-marca-light p-1.5"><p class="text-[9.5px] text-marca">Total</p><p class="text-xs font-semibold text-marca">${clpf(c.valor)}</p></div>
+      </div>
+      ${k ? `<p class="mt-2 text-[11px] text-neutral-600">Cada bloque incluye (receta actual): pulpa <b>${clp1f(k.pulpa * f)}</b> + fruta <b>${clp1f(k.fruta * f)}</b>${otros ? ' + otros <b>' + clp1f(otros) + '</b>' : ''} = ${clp1f(k.bloque)}</p>` : ''}
+      <p class="mt-1 text-[10.5px] text-neutral-500">${c.bloques} bloques en ${c.unidades.length} paquete${c.unidades.length === 1 ? '' : 's'}: ${paq.map((q) => `${q.cant} × ${q.tam} bl (${clpf(q.valor)} c/u)`).join(' · ')}</p>`}
+      <div class="mt-2 border-t border-neutral-100 pt-1">
+        ${c.lotes.map(({ l, v }) => `<div class="flex items-start justify-between py-1 text-[10.5px]"><span class="text-neutral-500">${l.ubicacion === 'CAMARA' ? '❄️' : '🏠'} ${fecha(l.fecha_ingreso)} · ${unidadesDe(l).join('/')}${v.sinCosto ? '' : ` · ${clp1f(v.costoBloque)}/bloque ${v.congelado ? '🔒' : ''}`}</span><b>${v.sinCosto ? 'sin costo' : clpf(v.valor)}</b></div>`).join('')}
+      </div>
+      <p class="mt-1 text-[10.5px] text-neutral-400">En cámara: ${clpf(c.vCamara)} · 🔒 = costo del día de producción</p>
+    </div>`;
+  }).join('') + `<div class="flex items-center justify-between rounded-xl border border-marca p-3"><span class="text-xs font-medium">Total producción · ${totalBloques} bloques</span><b class="text-sm text-marca">${clpf(totalValor)}</b></div>`;
 }
 
 const fmtCLP = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(Math.round(n || 0));
@@ -1252,8 +1297,8 @@ async function vistaCentroCostos() {
       </div>`;
   }
 
-  const pestanas = [['calcular', 'Calcular'], ['comparativo', 'Comparar'], ['mezclas', 'Mezclas'], ['margenes', 'Márgenes'], ['precios', 'Precios'], ['pulpas', 'Pulpas'], ['frutas', 'Frutas'], ['producciones', 'Producidas']];
-  const secciones = { calcular: seccionCalcular, comparativo: seccionComparativo, mezclas: seccionMezclas, margenes: seccionMargenes, precios: seccionPrecios, pulpas: seccionPulpas, frutas: seccionFrutas, producciones: seccionProducciones };
+  const pestanas = [['calcular', 'Calcular'], ['comparativo', 'Comparar'], ['mezclas', 'Mezclas'], ['desglose', 'Desglose'], ['margenes', 'Márgenes'], ['precios', 'Precios'], ['pulpas', 'Pulpas'], ['frutas', 'Frutas'], ['producciones', 'Producidas']];
+  const secciones = { calcular: seccionCalcular, comparativo: seccionComparativo, mezclas: seccionMezclas, desglose: () => renderDesgloseMezclas(lotes, { M, recetas, costosLote }), margenes: seccionMargenes, precios: seccionPrecios, pulpas: seccionPulpas, frutas: seccionFrutas, producciones: seccionProducciones };
   const cuerpo = (secciones[pestanaCostos] || seccionMezclas)();
 
   app.innerHTML = shell('Centro de costos', `
@@ -2427,19 +2472,6 @@ async function vistaProduccion() {
   const valCamara = CP ? enCamara.reduce((a, l) => a + valorLote(l, CP).valor, 0) : 0;
   const valSalon = CP ? enSalon.reduce((a, l) => a + valorLote(l, CP).valor, 0) : 0;
   const lotesSinCosto = CP ? activos.filter((l) => valorLote(l, CP).sinCosto).length : 0;
-  const combos = (() => {
-    if (!CP) return [];
-    const m = new Map();
-    activos.forEach((l) => {
-      const k = `${String(l.sabor).trim().toLowerCase()}|${String(l.complemento).trim().toLowerCase()}`;
-      if (!m.has(k)) m.set(k, { nombre: `${l.sabor} + ${l.complemento}`, lotes: 0, bloques: 0, valor: 0, bCamara: 0, vCamara: 0, sinCosto: 0, unidades: [], ppb: 1, receta: null });
-      const e = m.get(k), v = valorLote(l, CP);
-      e.lotes += 1; e.bloques += v.bloques; e.valor += v.valor; e.unidades.push(...unidadesDe(l)); if (!v.sinCosto) e.ppb = v.ppb; if (!e.receta) e.receta = CP.M.recetaDeLote(CP.recetas, l) || null;
-      if (l.ubicacion === 'CAMARA') { e.bCamara += v.bloques; e.vCamara += v.valor; }
-      if (v.sinCosto) e.sinCosto += 1;
-    });
-    return [...m.values()].sort((a, b) => b.valor - a.valor);
-  })();
   const { data: config } = await supabase.from('configuracion_temporada').select('meta_produccion').eq('id', 1).maybeSingle();
   const metaProduccion = config?.meta_produccion || 400;
   const porcentaje = metaProduccion > 0 ? Math.min(100, Math.round((totalExistencias / metaProduccion) * 100)) : 0;
@@ -2452,14 +2484,14 @@ async function vistaProduccion() {
   function hayParaUnir(l) { return candidatosUnir(l).length > 0; }
 
   function filaLote(l) {
-    const fecha = new Date(l.fecha_ingreso).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
+    const fecha = fechaCortaLote(l.fecha_ingreso);
     const uds = unidadesDe(l);
     const bloques = uds.length > 8 ? `${uds.slice(0, 8).join('/')}/… (${uds.length} unid.)` : uds.join('/');
     const existe = l.existe !== false;
     return `<div class="flex items-center justify-between border-b border-neutral-100 py-2">
       <div>
         <p class="text-sm font-medium ${existe ? '' : 'line-through opacity-50'}">${l.sabor} + ${l.complemento} ${l.estado === 'proxima' ? '<span class="ml-1 rounded-full bg-marca-light px-2 py-0.5 text-[10px] text-marca">próxima</span>' : ''}</p>
-        <p class="text-[11px] text-neutral-400">Bloques: ${bloques} · ${fecha}${CP ? (() => { const v = valorLote(l, CP); return v.sinCosto ? ' · sin costo' : `<br>Porción ${fmtCLP1(v.porcion)} · Bloque ${fmtCLP1(v.costoBloque)}<br>${resumenPaquetes(unidadesDe(l), v.costoBloque).map((q) => `${q.cant > 1 ? q.cant + ' × ' : ''}paquete de ${q.tam} = <b>${fmtCLP(q.valor)}</b>${q.cant > 1 ? ' c/u' : ''}`).join(' · ')}<br>Total del lote: ${v.bloques} bloques = <b class="text-marca">${fmtCLP(v.valor)}</b>`; })() : ''}</p>
+        <p class="text-[11px] text-neutral-400">Bloques: ${bloques} · ${fecha}${CP ? (() => { const v = valorLote(l, CP); return v.sinCosto ? ' · sin costo' : ` · <b class="text-marca">${fmtCLP(v.valor)}</b>`; })() : ''}</p>
         <label class="mt-1 flex items-center gap-1 text-[11px] text-neutral-500 ${permitido ? 'cursor-pointer' : ''}">
           <input type="checkbox" class="chk-lote h-4 w-4" data-lote-id="${l.id}" data-campo="existe" ${existe ? 'checked' : ''} ${permitido ? '' : 'disabled'} />Existe
         </label>
@@ -2503,26 +2535,9 @@ async function vistaProduccion() {
     </section>
     ${CP ? `
     <section class="px-4 pt-5">
-      <p class="mb-2 text-xs font-medium text-neutral-500">💰 Valor por mezcla (cámara + salón)</p>
-      ${combos.length ? combos.map((c) => {
-        const cb = c.bloques && !c.sinCosto ? c.valor / c.bloques : null;
-        const paq = cb != null ? resumenPaquetes(c.unidades, cb) : [];
-        const tipico = paq[0];
-        return `<div class="mb-2 rounded-xl border border-neutral-200 p-3">
-          <div class="flex items-baseline justify-between"><p class="text-sm font-medium">${c.nombre}</p><p class="text-[10.5px] text-neutral-400">${c.lotes} lote${c.lotes === 1 ? '' : 's'}</p></div>
-          ${cb == null ? '<p class="mt-1 text-xs text-neutral-400">Sin receta de costo para esta mezcla.</p>' : `
-          <div class="mt-2 grid grid-cols-4 gap-1.5 text-center">
-            <div class="rounded-lg bg-neutral-100 p-1.5"><p class="text-[9.5px] text-neutral-500">Porción</p><p class="text-xs font-semibold">${fmtCLP1(cb / (c.ppb || 1))}</p></div>
-            <div class="rounded-lg bg-neutral-100 p-1.5"><p class="text-[9.5px] text-neutral-500">Bloque</p><p class="text-xs font-semibold">${fmtCLP1(cb)}</p></div>
-            <div class="rounded-lg bg-neutral-100 p-1.5"><p class="text-[9.5px] text-neutral-500">Paquete${tipico ? ' de ' + tipico.tam : ''}</p><p class="text-xs font-semibold">${tipico ? fmtCLP(tipico.valor) : '—'}</p></div>
-            <div class="rounded-lg bg-marca-light p-1.5"><p class="text-[9.5px] text-marca">Total</p><p class="text-xs font-semibold text-marca">${fmtCLP(c.valor)}</p></div>
-          </div>
-          ${(() => { if (!c.receta) return ''; const k = CP.M.costosReceta(c.receta), f = c.receta.porciones_por_bloque || 1; const otros = (c.receta.otros_costos_porcion || 0) * f; return `<p class="mt-1.5 text-[10.5px] text-neutral-500">Cada bloque incluye (receta actual): pulpa <b>${fmtCLP1(k.pulpa * f)}</b> + fruta <b>${fmtCLP1(k.fruta * f)}</b>${otros ? ' + otros <b>' + fmtCLP1(otros) + '</b>' : ''} = ${fmtCLP1(k.bloque)}</p>`; })()}
-          <p class="mt-1.5 text-[10.5px] text-neutral-500">${c.bloques} bloques en ${c.unidades.length} paquete${c.unidades.length === 1 ? '' : 's'}: ${paq.map((q) => `${q.cant} × ${q.tam} bl (${fmtCLP(q.valor)} c/u)`).join(' · ')}</p>
-          <p class="text-[10.5px] text-neutral-400">En cámara: ${fmtCLP(c.vCamara)}${c.sinCosto ? ` · ${c.sinCosto} lote(s) sin costo` : ''}</p>`}
-        </div>`;
-      }).join('') + `<div class="flex items-center justify-between rounded-xl border border-marca p-3"><span class="text-xs font-medium">Total producción · ${combos.reduce((a, c) => a + c.bloques, 0)} bloques</span><b class="text-sm text-marca">${fmtCLP(combos.reduce((a, c) => a + c.valor, 0))}</b></div>
-      <p class="mt-1 text-[10.5px] text-neutral-400">Valores por mezcla = promedio ponderado de sus lotes (cada lote conserva el costo del día en que se elaboró). Paquete = una unidad del lote; porción = bloque ÷ porciones por bloque de la receta.</p>` : '<p class="text-xs text-neutral-400">— sin producciones —</p>'}
+      <button id="btn-ir-desglose" class="flex w-full items-center justify-between rounded-xl border border-neutral-200 px-3 py-2.5 text-xs font-medium text-neutral-600">
+        <span>💰 Desglose de costos por mezcla</span><span>→</span>
+      </button>
     </section>` : ''}
     <section class="px-4 pt-5">
       <button id="btn-ir-historial" class="flex w-full items-center justify-between rounded-xl border border-neutral-200 px-3 py-2.5 text-xs font-medium text-neutral-600">
@@ -2535,6 +2550,7 @@ async function vistaProduccion() {
   `);
   montarShell();
   document.getElementById('btn-ir-historial').addEventListener('click', () => cambiarPantalla('historial'));
+  document.getElementById('btn-ir-desglose')?.addEventListener('click', () => { pestanaCostos = 'desglose'; cambiarPantalla('costos'); });
   if (permitido) {
     document.getElementById('btn-nueva-mezcla').addEventListener('click', () => document.getElementById('panel-nueva-mezcla').classList.toggle('hidden'));
     document.getElementById('btn-en-uso').addEventListener('click', () => document.getElementById('panel-en-uso').classList.toggle('hidden'));
@@ -2785,7 +2801,7 @@ function montarFormularioProduccion() {
 }
 
 function panelEnUsoHtml(enCamara) {
-  const opciones = enCamara.map((l) => `<option value="${l.id}">${l.sabor} + ${l.complemento} — ${new Date(l.fecha_ingreso).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' })}</option>`).join('');
+  const opciones = enCamara.map((l) => `<option value="${l.id}">${l.sabor} + ${l.complemento} — ${fechaCortaLote(l.fecha_ingreso)}</option>`).join('');
   return `
     <div id="panel-en-uso" class="hidden border-t border-neutral-200 p-4 mt-4 flex flex-col gap-5">
       <div>
@@ -3375,7 +3391,7 @@ async function vistaGlobal() {
       const totalBloques = totalBloquesDe(l);
       const est = estadoStock(totalBloques);
       const colorBarra = totalBloques < 0 ? '#FF1744' : totalBloques <= umbralRojo ? '#D23B3B' : totalBloques <= umbralAmarillo ? '#C97B06' : '#168A62';
-      const fecha = new Date(l.fecha_ingreso).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
+      const fecha = fechaCortaLote(l.fecha_ingreso);
       return `
         <div class="flex items-center gap-3 border-b border-neutral-100 px-2 py-2">
           <span class="h-full w-1 self-stretch rounded" style="background-color:${colorBarra}"></span>
