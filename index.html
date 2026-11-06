@@ -2419,6 +2419,19 @@ async function vistaProduccion() {
   const valCamara = CP ? enCamara.reduce((a, l) => a + valorLote(l, CP).valor, 0) : 0;
   const valSalon = CP ? enSalon.reduce((a, l) => a + valorLote(l, CP).valor, 0) : 0;
   const lotesSinCosto = CP ? activos.filter((l) => valorLote(l, CP).sinCosto).length : 0;
+  const combos = (() => {
+    if (!CP) return [];
+    const m = new Map();
+    activos.forEach((l) => {
+      const k = `${String(l.sabor).trim().toLowerCase()}|${String(l.complemento).trim().toLowerCase()}`;
+      if (!m.has(k)) m.set(k, { nombre: `${l.sabor} + ${l.complemento}`, lotes: 0, bloques: 0, valor: 0, bCamara: 0, vCamara: 0, sinCosto: 0 });
+      const e = m.get(k), v = valorLote(l, CP);
+      e.lotes += 1; e.bloques += v.bloques; e.valor += v.valor;
+      if (l.ubicacion === 'CAMARA') { e.bCamara += v.bloques; e.vCamara += v.valor; }
+      if (v.sinCosto) e.sinCosto += 1;
+    });
+    return [...m.values()].sort((a, b) => b.valor - a.valor);
+  })();
   const { data: config } = await supabase.from('configuracion_temporada').select('meta_produccion').eq('id', 1).maybeSingle();
   const metaProduccion = config?.meta_produccion || 400;
   const porcentaje = metaProduccion > 0 ? Math.min(100, Math.round((totalExistencias / metaProduccion) * 100)) : 0;
@@ -2438,7 +2451,7 @@ async function vistaProduccion() {
     return `<div class="flex items-center justify-between border-b border-neutral-100 py-2">
       <div>
         <p class="text-sm font-medium ${existe ? '' : 'line-through opacity-50'}">${l.sabor} + ${l.complemento} ${l.estado === 'proxima' ? '<span class="ml-1 rounded-full bg-marca-light px-2 py-0.5 text-[10px] text-marca">próxima</span>' : ''}</p>
-        <p class="text-[11px] text-neutral-400">Bloques: ${bloques} · ${fecha}${CP ? (() => { const v = valorLote(l, CP); return v.sinCosto ? ' · sin costo' : ` · <b class="text-marca">${fmtCLP(v.valor)}</b> (${fmtCLP1(v.costoBloque)}/bloque)`; })() : ''}</p>
+        <p class="text-[11px] text-neutral-400">Bloques: ${bloques} · ${fecha}${CP ? (() => { const v = valorLote(l, CP); return v.sinCosto ? ' · sin costo' : `<br>${v.bloques} bloques × ${fmtCLP1(v.costoBloque)} = <b class="text-marca">${fmtCLP(v.valor)}</b>`; })() : ''}</p>
         <label class="mt-1 flex items-center gap-1 text-[11px] text-neutral-500 ${permitido ? 'cursor-pointer' : ''}">
           <input type="checkbox" class="chk-lote h-4 w-4" data-lote-id="${l.id}" data-campo="existe" ${existe ? 'checked' : ''} ${permitido ? '' : 'disabled'} />Existe
         </label>
@@ -2480,6 +2493,21 @@ async function vistaProduccion() {
       <p class="mb-2 text-xs font-medium text-neutral-500">🏠 EN SALÓN (en uso)</p>
       ${enSalon.length ? enSalon.map(filaLote).join('') : '<p class="text-xs text-neutral-400">— vacío —</p>'}
     </section>
+    ${CP ? `
+    <section class="px-4 pt-5">
+      <p class="mb-2 text-xs font-medium text-neutral-500">💰 Valor por mezcla (cámara + salón)</p>
+      ${combos.length ? `
+      <div class="overflow-x-auto rounded-xl border border-neutral-200">
+        <table class="w-full text-[11px]">
+          <thead><tr class="text-left text-neutral-500"><th class="p-2">Mezcla</th><th class="p-2 text-right">Bloques</th><th class="p-2 text-right">$ / bloque</th><th class="p-2 text-right">Total</th></tr></thead>
+          <tbody>
+            ${combos.map((c) => `<tr class="border-t border-neutral-100"><td class="p-2 font-medium">${c.nombre}<br><span class="font-normal text-neutral-400">${c.lotes} lote${c.lotes === 1 ? '' : 's'} · cámara ${fmtCLP(c.vCamara)}${c.sinCosto ? ' · sin costo' : ''}</span></td><td class="p-2 text-right">${c.bloques}</td><td class="p-2 text-right">${c.bloques && !c.sinCosto ? fmtCLP1(c.valor / c.bloques) : '—'}</td><td class="p-2 text-right font-medium">${fmtCLP(c.valor)}</td></tr>`).join('')}
+            <tr class="border-t-2 border-neutral-300 font-medium"><td class="p-2">Total producción</td><td class="p-2 text-right">${combos.reduce((a, c) => a + c.bloques, 0)}</td><td class="p-2 text-right">${combos.reduce((a, c) => a + c.bloques, 0) ? fmtCLP1(combos.reduce((a, c) => a + c.valor, 0) / combos.reduce((a, c) => a + c.bloques, 0)) : '—'}</td><td class="p-2 text-right text-marca">${fmtCLP(combos.reduce((a, c) => a + c.valor, 0))}</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="mt-1 text-[10.5px] text-neutral-400">El $/bloque de cada mezcla es el promedio ponderado de sus lotes (cada lote conserva su costo del día de producción).</p>` : '<p class="text-xs text-neutral-400">— sin producciones —</p>'}
+    </section>` : ''}
     <section class="px-4 pt-5">
       <button id="btn-ir-historial" class="flex w-full items-center justify-between rounded-xl border border-neutral-200 px-3 py-2.5 text-xs font-medium text-neutral-600">
         <span>⭐ Historial de sabores realizados</span>
