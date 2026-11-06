@@ -742,6 +742,17 @@ async function renderPantalla() {
 
 // ---------------- Modelo de costos compartido ----------------
 
+// ---- Unidades de un lote: 4 columnas históricas + lista ilimitada (bloques_extra) para la 5ª en adelante ----
+const unidadesDe = (l) => [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4, ...(Array.isArray(l.bloques_extra) ? l.bloques_extra : [])].map(Number).filter((n) => Number.isFinite(n) && n > 0);
+const totalBloquesDe = (l) => unidadesDe(l).reduce((a, n) => a + n, 0);
+/** Convierte una lista de unidades en columnas. bloques_extra solo se envía si hace falta (o si el lote ya lo tenía). */
+function columnasBloques(arr, conExtra = false) {
+  const [b1 = 0, b2 = 0, b3 = 0, b4 = 0] = arr;
+  const c = { bloques_uni1: b1, bloques_uni2: b2, bloques_uni3: b3, bloques_uni4: b4 };
+  if (conExtra || arr.length > 4) c.bloques_extra = arr.slice(4);
+  return c;
+}
+
 const CFG_COSTOS_DEFECTO = { precio_venta_jarra: 4990, tope_costo_pct: 12, porciones_lote: 12, jarras_lote: 14 };
 
 function crearModeloCostos({ pulpas, frutas, cfg }) {
@@ -768,7 +779,7 @@ function crearModeloCostos({ pulpas, frutas, cfg }) {
   }
   const nombreReceta = (r) => `${r.pulpa}${r.fruta ? ' + ' + r.fruta : ''}${r.fruta2 ? ' + ' + r.fruta2 : ''}`;
   const recetaDeLote = (recetas, l) => recetas.find((x) => norm(x.pulpa) === norm(l.sabor) && norm(x.fruta) === norm(l.complemento));
-  const bloquesDe = (l) => [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].reduce((a, b) => a + (Number(b) || 0), 0);
+  const bloquesDe = totalBloquesDe;
   return { norm, pulpaDe, frutaDe, costoPulpaPorcion, gramosUtiles, costoGramoUtil, costosReceta, nombreReceta, recetaDeLote, bloquesDe };
 }
 
@@ -953,7 +964,7 @@ async function vistaCentroCostos() {
   const costosLote = new Map((rpc.data || []).map((x) => [x.produccion_id, Number(x.costo_bloque)]));
   const M = crearModeloCostos({ pulpas, frutas, cfg });
   const { norm, pulpaDe, frutaDe, costoPulpaPorcion, gramosUtiles, costoGramoUtil, costosReceta } = M;
-  const totalBloques = (l) => [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].reduce((a, b) => a + (Number(b) || 0), 0);
+  const totalBloques = totalBloquesDe;
 
   const inp = (campo, valor, ph, ancho = 'w-full') => `<input type="text" inputmode="decimal" data-campo="${campo}" value="${valor ?? ''}" placeholder="${ph}" class="${ancho} !h-8 !px-2 text-xs" ${esAdmin ? '' : 'disabled'} />`;
   const txt = (campo, valor, ph, lista) => `<input type="text" data-campo="${campo}" value="${valor ?? ''}" placeholder="${ph}" ${lista ? `list="${lista}"` : ''} class="w-full !h-8 !px-2 text-xs" ${esAdmin ? '' : 'disabled'} />`;
@@ -2401,7 +2412,7 @@ async function vistaProduccion() {
   const permitido = puedeEscribir('produccion');
 
   function totalBloquesLote(l) {
-    return [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].reduce((a, b) => a + (b || 0), 0);
+    return totalBloquesDe(l);
   }
   const totalExistencias = enCamara.reduce((a, l) => a + totalBloquesLote(l), 0);
   const CP = await cargarCostosProduccion();
@@ -2421,7 +2432,8 @@ async function vistaProduccion() {
 
   function filaLote(l) {
     const fecha = new Date(l.fecha_ingreso).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
-    const bloques = [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].filter(Boolean).join('/');
+    const uds = unidadesDe(l);
+    const bloques = uds.length > 8 ? `${uds.slice(0, 8).join('/')}/… (${uds.length} unid.)` : uds.join('/');
     const existe = l.existe !== false;
     return `<div class="flex items-center justify-between border-b border-neutral-100 py-2">
       <div>
@@ -2550,7 +2562,7 @@ async function vistaProduccion() {
 /** Muestra un pequeño selector de fecha flotante junto al botón que se tocó, y llama a onConfirmar con el valor elegido. */
 function abrirModalEditarLote(lote, alTerminar) {
   document.getElementById('modal-editar-lote')?.remove();
-  const bloques = [lote.bloques_uni1, lote.bloques_uni2, lote.bloques_uni3, lote.bloques_uni4].filter((b) => b != null && b !== 0).join(', ');
+  const bloques = unidadesDe(lote).join(', ');
   const esc = (v) => String(v ?? '').replace(/"/g, '&quot;');
   const c = document.createElement('div');
   c.id = 'modal-editar-lote';
@@ -2561,7 +2573,7 @@ function abrirModalEditarLote(lote, alTerminar) {
       <div class="flex flex-col gap-3">
         <div><label class="mb-1 block text-xs text-neutral-500">Pulpa</label><input id="edit-lote-sabor" value="${esc(lote.sabor)}" /></div>
         <div><label class="mb-1 block text-xs text-neutral-500">Fruta</label><input id="edit-lote-complemento" value="${esc(lote.complemento)}" /></div>
-        <div><label class="mb-1 block text-xs text-neutral-500">Bloques (separados por coma, hasta 4)</label><input id="edit-lote-bloques" type="text" inputmode="decimal" value="${esc(bloques)}" placeholder="ej. 21, 21" /></div>
+        <div><label class="mb-1 block text-xs text-neutral-500">Unidades de bloques (separadas por coma, sin límite)</label><input id="edit-lote-bloques" type="text" inputmode="decimal" value="${esc(bloques)}" placeholder="ej. 21, 21" /></div>
         <div><label class="mb-1 block text-xs text-neutral-500">Fecha de elaboración</label><input id="edit-lote-fecha" type="date" value="${String(lote.fecha_ingreso).slice(0, 10)}" /></div>
         <div><label class="mb-1 block text-xs text-neutral-500">Responsables de la preparación</label><input id="edit-lote-preparado" value="${esc((lote.preparado_por || []).join(', '))}" /></div>
         <div><label class="mb-1 block text-xs text-neutral-500">Encargado del turno</label><input id="edit-lote-encargado" value="${esc(lote.encargado_turno)}" /></div>
@@ -2582,11 +2594,10 @@ function abrirModalEditarLote(lote, alTerminar) {
     const bloquesTxt = document.getElementById('edit-lote-bloques').value.trim();
     const bs = bloquesTxt.split(',').map((x) => x.trim().replace(',', '.')).filter(Boolean).map(Number);
     if (!sabor || !complemento) { err.textContent = 'Pulpa y Fruta son obligatorias.'; err.classList.remove('hidden'); return; }
-    if (!bs.length || bs.some((n) => !Number.isFinite(n) || n < 0) || bs.length > 4) { err.textContent = 'Indica entre 1 y 4 cantidades de bloques válidas.'; err.classList.remove('hidden'); return; }
-    const [b1 = 0, b2 = 0, b3 = 0, b4 = 0] = bs;
+    if (!bs.length || bs.some((n) => !Number.isFinite(n) || n <= 0)) { err.textContent = 'Indica al menos una cantidad de bloques válida (mayor que 0).'; err.classList.remove('hidden'); return; }
     const prep = document.getElementById('edit-lote-preparado').value.split(',').map((x) => x.trim()).filter(Boolean);
     const cambios = {
-      sabor, complemento, bloques_uni1: b1, bloques_uni2: b2, bloques_uni3: b3, bloques_uni4: b4,
+      sabor, complemento, ...columnasBloques(bs, 'bloques_extra' in lote),
       fecha_ingreso: document.getElementById('edit-lote-fecha').value || lote.fecha_ingreso,
       preparado_por: prep, encargado_turno: document.getElementById('edit-lote-encargado').value.trim() || null
     };
@@ -2600,7 +2611,7 @@ function abrirModalEditarLote(lote, alTerminar) {
 function abrirModalUnirLotes(destino, candidatos, alTerminar) {
   const existente = document.getElementById('modal-unir-lotes');
   if (existente) existente.remove();
-  const sumaBloques = (l) => [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].reduce((a, b) => a + (Number(b) || 0), 0);
+  const sumaBloques = totalBloquesDe;
   const fmt = (f) => new Date(f).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
   const c = document.createElement('div');
   c.id = 'modal-unir-lotes';
@@ -2627,10 +2638,9 @@ function abrirModalUnirLotes(destino, candidatos, alTerminar) {
     if (!ids.length) return c.remove();
     const origenes = candidatos.filter((x) => ids.includes(String(x.id)));
     const todos = [destino, ...origenes];
-    const suma = (k) => todos.reduce((a, l) => a + (Number(l[k]) || 0), 0);
+    const unidadesJuntas = todos.flatMap((l) => unidadesDe(l));
     const cambios = {
-      bloques_uni1: suma('bloques_uni1'), bloques_uni2: suma('bloques_uni2'),
-      bloques_uni3: suma('bloques_uni3'), bloques_uni4: suma('bloques_uni4'),
+      ...columnasBloques(unidadesJuntas, 'bloques_extra' in destino),
       fecha_ingreso: todos.map((l) => l.fecha_ingreso).sort()[0],
       preparado_por: [...new Set(todos.flatMap((l) => l.preparado_por || []))]
     };
@@ -2715,11 +2725,11 @@ function montarFormularioProduccion() {
 
     const bloques = bloquesRaw.split(',').map((b) => Number(b.trim())).filter((n) => !Number.isNaN(n));
     const preparadoPor = preparadoPorRaw ? preparadoPorRaw.split(',').map((n) => n.trim()).filter(Boolean) : [usuarioActual.nombre];
-    const [b1 = 0, b2 = 0, b3 = 0, b4 = 0] = bloques;
+    const unidadesNuevas = bloques.filter((n) => n > 0);
 
     const { data: lote, error } = await supabase.from('produccion_mezclas').insert([{
       ubicacion: 'CAMARA', sabor, complemento,
-      bloques_uni1: b1, bloques_uni2: b2, bloques_uni3: b3, bloques_uni4: b4,
+      ...columnasBloques(unidadesNuevas),
       preparado_por: preparadoPor, encargado_turno: encargado
     }]).select().single();
 
@@ -2757,12 +2767,11 @@ function panelEnUsoHtml(enCamara) {
 }
 
 function montarPanelEnUso(enCamara) {
-  const SLOTS = ['bloques_uni1', 'bloques_uni2', 'bloques_uni3', 'bloques_uni4'];
 
   function renderCheckboxesTraslado(lote) {
     const cont = document.getElementById('checkboxes-traslado');
     if (!lote) { cont.classList.add('hidden'); cont.classList.remove('flex'); cont.innerHTML = ''; return; }
-    const valores = SLOTS.map((s) => lote[s]).filter((v) => v !== null && v !== undefined && v !== 0);
+    const valores = unidadesDe(lote);
     if (valores.length <= 1) { cont.classList.add('hidden'); cont.classList.remove('flex'); cont.innerHTML = ''; return; }
     cont.classList.remove('hidden');
     cont.classList.add('flex');
@@ -2816,18 +2825,16 @@ function montarPanelEnUso(enCamara) {
     if (noSeleccionados.length === 0) return trasladoCompleto();
 
     // Traslado parcial: el lote se divide en dos — una parte viaja a salón, el resto queda en cámara
-    const [nb1 = null, nb2 = null, nb3 = null, nb4 = null] = seleccionados;
-    const [rb1 = null, rb2 = null, rb3 = null, rb4 = null] = noSeleccionados;
 
     const { data: nuevoLote, error: errCrear } = await supabase.from('produccion_mezclas').insert([{
       ubicacion: 'SALON', sabor: lote.sabor, complemento: lote.complemento,
-      bloques_uni1: nb1, bloques_uni2: nb2, bloques_uni3: nb3, bloques_uni4: nb4,
+      ...columnasBloques(seleccionados),
       fecha_ingreso: lote.fecha_ingreso, preparado_por: lote.preparado_por, encargado_turno: lote.encargado_turno
     }]).select().single();
     if (errCrear) { errorEl.textContent = errCrear.message; errorEl.classList.remove('hidden'); return; }
 
     const { error: errActualizar } = await supabase.from('produccion_mezclas').update({
-      bloques_uni1: rb1, bloques_uni2: rb2, bloques_uni3: rb3, bloques_uni4: rb4
+      ...columnasBloques(noSeleccionados, 'bloques_extra' in lote)
     }).eq('id', loteId);
     if (errActualizar) {
       errorEl.textContent = 'Se creó el traslado, pero no se pudo actualizar lo que queda en cámara: ' + errActualizar.message;
@@ -3321,7 +3328,7 @@ async function vistaGlobal() {
 
   if (laminaActual === 'produccion') {
     cont.innerHTML = lotesProduccion.length ? lotesProduccion.map((l) => {
-      const totalBloques = [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].reduce((a, b) => a + (b || 0), 0);
+      const totalBloques = totalBloquesDe(l);
       const est = estadoStock(totalBloques);
       const colorBarra = totalBloques < 0 ? '#FF1744' : totalBloques <= umbralRojo ? '#D23B3B' : totalBloques <= umbralAmarillo ? '#C97B06' : '#168A62';
       const fecha = new Date(l.fecha_ingreso).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
@@ -3335,7 +3342,7 @@ async function vistaGlobal() {
           <span class="rounded-full px-2.5 py-0.5 text-xs font-medium ${est.clase}">${totalBloques}</span>
         </div>`;
     }).join('') : `<p class="px-4 py-6 text-center text-sm text-neutral-400">No hay producción registrada.</p>`;
-    if (puedeVerValorTotal) document.getElementById('resumen-seleccion').innerHTML = `Total producción: <b>${lotesProduccion.reduce((a, l) => a + [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].reduce((x, y) => x + (y || 0), 0), 0)} bloques</b> · Cámara ${formatoCLP(valProdCamara)} · Salón ${formatoCLP(valProdSalon)}`;
+    if (puedeVerValorTotal) document.getElementById('resumen-seleccion').innerHTML = `Total producción: <b>${lotesProduccion.reduce((a, l) => a + totalBloquesDe(l), 0)} bloques</b> · Cámara ${formatoCLP(valProdCamara)} · Salón ${formatoCLP(valProdSalon)}`;
     return;
   }
 
