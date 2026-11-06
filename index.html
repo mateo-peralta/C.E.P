@@ -19,8 +19,8 @@
     theme: {
       extend: {
         colors: {
-          marca: { DEFAULT: '#8B3A5C', light: '#F4E8ED' },
-          verde: '#1D9E75', amarillo: '#EF9F27', rojo: '#E24B4A', rojoFluor: '#FF1744'
+          marca: { DEFAULT: 'rgb(var(--m) / <alpha-value>)', light: 'rgb(var(--ml) / <alpha-value>)', dark: 'rgb(var(--md) / <alpha-value>)', soft: 'rgb(var(--s) / <alpha-value>)' },
+          verde: '#168A62', amarillo: '#C97B06', rojo: '#D23B3B', rojoFluor: '#FF1744'
         }
       }
     }
@@ -50,6 +50,121 @@
   html.dark input, html.dark select { background-color: #262626; border-color: #404040; color: #f5f5f5; }
   html.dark input::placeholder { color: #737373; }
   html.dark .btn-acceso-inicio.border-black { border-color: #ffffff; }
+
+  /* ======== Refinamiento visual (v1.1) ======== */
+
+  :root { --m: 139 58 92; --md: 107 38 70; --g1: 154 68 104; --s: 232 169 196; --ml: 244 232 237; --t1: 59 34 48; --t2: 46 27 38; --card: 31 28 32; --bg: 20 18 20; --line: 63 63 70; --line2: 74 64 72; }
+  html.tema-oceano { --m: 61 95 216; --md: 45 74 180; --g1: 43 168 224; --s: 125 227 247; --ml: 15 42 68; --t1: 15 42 68; --t2: 12 32 56; --card: 18 27 46; --bg: 11 18 32; --line: 36 50 77; --line2: 46 62 94; }
+  html.tema-amatista { --m: 176 58 214; --md: 140 40 180; --g1: 124 92 240; --s: 216 180 254; --ml: 43 26 74; --t1: 43 26 74; --t2: 34 20 61; --card: 27 19 48; --bg: 18 12 31; --line: 58 43 94; --line2: 72 54 112; }
+  html.tema-aurora { --m: 14 140 154; --md: 10 110 122; --g1: 18 165 122; --s: 110 231 183; --ml: 15 59 54; --t1: 15 59 54; --t2: 11 46 45; --card: 15 34 38; --bg: 8 23 26; --line: 30 64 68; --line2: 40 80 86; }
+
+  /* Temas con degradado (base oscura): fondo con resplandores, línea de cabecera y saludo con degradado */
+  html[class*="tema-"] body { background: radial-gradient(900px 520px at 92% -8%, rgb(var(--g1) / .24), transparent 60%), radial-gradient(760px 480px at -10% 6%, rgb(var(--m) / .22), transparent 55%), rgb(var(--bg)); background-attachment: fixed; }
+  html[class*="tema-"] header.flex { border-bottom: 1px solid transparent; border-image: linear-gradient(90deg, rgb(var(--g1) / .7), rgb(var(--m) / .15)) 1; }
+  html[class*="tema-"] .hero-inicio p.text-marca { background: linear-gradient(90deg, rgb(var(--s)), rgb(var(--g1))); -webkit-background-clip: text; background-clip: text; color: transparent !important; }
+  html[class*="tema-"] .rounded-xl.border { box-shadow: 0 0 0 1px rgb(var(--m) / .10), var(--sombra); }
+
+  :root { --borde:#E6D9DF; --fondo:#FAF6F8; --sombra:0 1px 2px rgba(70,25,50,.06), 0 6px 16px -8px rgba(70,25,50,.16); }
+  html { scroll-behavior: smooth; }
+  body { font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; letter-spacing: -0.005em; font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; }
+  html:not(.dark) body { background-color: var(--fondo); }
+
+  /* Cabecera y barra inferior: fijas, con efecto vidrio */
+  header.flex { position: sticky; top: 0; z-index: 30; background: rgba(255,255,255,.88); backdrop-filter: saturate(1.4) blur(10px); -webkit-backdrop-filter: saturate(1.4) blur(10px); border-bottom: 1px solid var(--borde); box-shadow: 0 1px 0 rgb(var(--m) / .05); }
+  header.flex > p { font-size: 0.95rem; font-weight: 650; letter-spacing: -0.01em; }
+  nav.fixed { background: rgba(255,255,255,.92); backdrop-filter: saturate(1.4) blur(10px); -webkit-backdrop-filter: saturate(1.4) blur(10px); border-top: 1px solid var(--borde); padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 -6px 18px -12px rgba(70,25,50,.25); }
+  nav.fixed button { transition: background-color .15s, color .15s, transform .1s; }
+  nav.fixed button.bg-marca { background: linear-gradient(180deg, rgb(var(--g1)), rgb(var(--m))); box-shadow: 0 4px 10px -4px rgb(var(--m) / .6); }
+
+  /* Tarjetas: elevación suave y borde cálido */
+  .rounded-xl.border, .rounded-2xl.border { border-color: var(--borde); background-color: #fff; box-shadow: var(--sombra); }
+  .rounded-lg.bg-neutral-50 { background-color: #fff; border: 1px solid var(--borde); box-shadow: var(--sombra); }
+  .rounded-lg.bg-marca-light { background: linear-gradient(135deg, rgb(var(--ml)), rgb(var(--ml))); border: 1px solid rgb(var(--m) / .18); }
+  /* Las tarjetas que son alertas conservan su tinte */
+  .border-rojo.rounded-xl, .border-rojo.rounded-lg { background-color: rgba(210,59,59,.06); }
+  .border-verde.rounded-xl { background-color: rgba(22,138,98,.07); }
+  .border-amarillo.rounded-lg, .border-amarillo.rounded-xl { background-color: rgba(201,123,6,.08); }
+
+  /* Jerarquía de títulos */
+  p.text-xs.font-medium.text-neutral-600, p.text-sm.font-medium { font-weight: 650; color: #3E2433; }
+  p.text-xs.font-medium.text-neutral-500 { text-transform: uppercase; font-size: 0.68rem; letter-spacing: .06em; font-weight: 650; color: #8A6A79; }
+
+  /* Botones */
+  button { transition: transform .1s, box-shadow .15s, background-color .15s, border-color .15s; }
+  button:active:not(:disabled) { transform: scale(.975); }
+  button.bg-marca:not(nav button) { background: linear-gradient(180deg, rgb(var(--g1)), rgb(var(--m))); box-shadow: 0 2px 6px -2px rgb(var(--m) / .55); }
+  button.bg-marca:not(nav button):hover { background: linear-gradient(180deg, rgb(var(--g1)), rgb(var(--md))); }
+  button.rounded-full.border, button.rounded-lg.border { border-color: #D9C6CF; }
+  button:focus-visible, a:focus-visible { outline: 3px solid rgb(var(--m) / .35); outline-offset: 2px; }
+
+  /* Campos */
+  input:not([type="checkbox"]), select { height: 2.5rem; border-color: #DCCBD3; border-radius: 0.65rem; background-color: #fff; transition: border-color .15s, box-shadow .15s; }
+  input:focus, select:focus { border-color: rgb(var(--m)); box-shadow: 0 0 0 3px rgb(var(--m) / .16); }
+  input[type="checkbox"] { width: 1.05rem; height: 1.05rem; border-radius: .3rem; }
+
+  /* Tablas */
+  table thead th { font-weight: 650; font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; color: #8A6A79; }
+  table tbody tr:nth-child(even) { background-color: rgb(var(--m) / .035); }
+  table tbody tr:hover { background-color: rgb(var(--m) / .07); }
+
+  /* Barras y gráficos */
+  .h-3.rounded-sm, .h-2.rounded-sm, .h-2.rounded-full, .h-3.rounded-full { border-radius: 999px; }
+  .h-3.bg-marca, .h-3.bg-verde, .h-3.bg-rojo, .h-2.bg-marca, .h-2.bg-verde, .h-2.bg-rojo { background-image: linear-gradient(90deg, rgba(255,255,255,.18), rgba(255,255,255,0)); }
+  .h-full.rounded-full.bg-marca { background-image: linear-gradient(90deg, rgb(var(--g1)), rgb(var(--m))); }
+  .h-full.rounded-full.bg-verde { background-image: linear-gradient(90deg, #1FA675, var(--verde, #168A62)); }
+  svg polyline { stroke-linejoin: round; stroke-linecap: round; }
+
+  /* Pastillas de estado de stock (verde / amarillo / rojo) con más presencia */
+  .rounded-full.bg-verde\/10 { background-color: rgba(22,138,98,.13); box-shadow: inset 0 0 0 1px rgba(22,138,98,.28); }
+  .rounded-full.bg-amarillo\/10 { background-color: rgba(201,123,6,.14); box-shadow: inset 0 0 0 1px rgba(201,123,6,.32); }
+  .rounded-full.bg-rojo\/10 { background-color: rgba(210,59,59,.13); box-shadow: inset 0 0 0 1px rgba(210,59,59,.3); }
+
+  /* Inicio: tarjeta de bienvenida y accesos */
+  .hero-inicio { margin: 1.25rem 1.5rem 1rem; border: 1px solid var(--borde); border-radius: 1.5rem; background: linear-gradient(135deg, rgb(var(--ml)) 0%, #FFFFFF 70%); box-shadow: var(--sombra); }
+  .btn-acceso-inicio { background-color: #fff; box-shadow: 4px 4px 0 rgb(var(--m)); transition: transform .1s, box-shadow .1s; }
+  .btn-acceso-inicio:active { transform: translate(3px, 3px); box-shadow: 1px 1px 0 rgb(var(--m)); }
+  .btn-acceso-inicio .icono-acceso { display: flex; height: 3rem; width: 3rem; align-items: center; justify-content: center; border-radius: 9999px; background: rgb(var(--ml)); font-size: 1.5rem; }
+
+  /* Menú desplegable */
+  #menu-desplegable { border-color: var(--borde); box-shadow: 0 12px 32px -10px rgba(70,25,50,.35); border-radius: .9rem; overflow: hidden; }
+  #menu-desplegable button { transition: background-color .12s; }
+  #menu-desplegable button:hover { background-color: rgb(var(--ml)); }
+
+  /* ---- Modo oscuro: contraste y marca legible ---- */
+  html.dark { --borde: rgb(var(--line)); --sombra: 0 1px 2px rgba(0,0,0,.5), 0 8px 18px -10px rgba(0,0,0,.7); }
+  html.dark body { background-color: rgb(var(--bg)); }
+  html.dark header.flex { background: rgb(var(--bg) / .88); border-bottom-color: rgb(var(--line)); }
+  html.dark nav.fixed { background: rgb(var(--bg) / .94); border-top-color: rgb(var(--line)); }
+  html.dark .rounded-xl.border, html.dark .rounded-2xl.border { background-color: rgb(var(--card)); border-color: rgb(var(--line)) !important; }
+  html.dark .rounded-lg.bg-neutral-50 { background-color: rgb(var(--card)) !important; border-color: rgb(var(--line)); }
+  html.dark .rounded-lg.bg-marca-light, html.dark .bg-marca-light { background: linear-gradient(135deg, rgb(var(--t1)), rgb(var(--t2))) !important; border-color: rgb(var(--s) / .25); }
+  html.dark .text-marca { color: rgb(var(--s)) !important; }
+  html.dark .border-marca { border-color: rgb(var(--s)) !important; }
+  html.dark button.bg-marca, html.dark nav button.bg-marca { color: #fff !important; }
+  html.dark .hero-inicio { background: linear-gradient(135deg, rgb(var(--t1)) 0%, rgb(var(--card)) 75%); border-color: rgb(var(--line)); }
+  html.dark .btn-acceso-inicio { background-color: rgb(var(--card)); box-shadow: 4px 4px 0 rgb(var(--s)); }
+  html.dark .btn-acceso-inicio .icono-acceso { background: rgb(var(--t1)); }
+  html.dark .text-neutral-700 { color: #e5e5e5 !important; }
+  html.dark p.text-xs.font-medium.text-neutral-600, html.dark p.text-sm.font-medium { color: #F1DDE6 !important; }
+  html.dark p.text-xs.font-medium.text-neutral-500, html.dark table thead th { color: #BFA3B1 !important; }
+  html.dark input, html.dark select { background-color: rgb(var(--card)); border-color: rgb(var(--line2)); }
+  html.dark input:focus, html.dark select:focus { border-color: rgb(var(--s)); box-shadow: 0 0 0 3px rgb(var(--s) / .2); }
+  html.dark table tbody tr:nth-child(even) { background-color: rgba(255,255,255,.035); }
+  html.dark table tbody tr:hover { background-color: rgb(var(--s) / .09); }
+  html.dark #menu-desplegable { background-color: rgb(var(--card)); border-color: rgb(var(--line)); }
+  html.dark #menu-desplegable button:hover { background-color: rgb(var(--t1)); }
+  html.dark button.rounded-full.border, html.dark button.rounded-lg.border { border-color: rgb(var(--line2)); }
+  html.dark svg g[stroke] { stroke: rgb(var(--s)); }
+  html.dark svg circle[fill="#8B3A5C"] { fill: rgb(var(--s)); }
+  html.dark svg line[stroke="currentColor"], html.dark svg text { fill: currentColor; }
+
+  html.dark body.bg-neutral-50 { background-color: rgb(var(--bg)) !important; }
+  html.dark .text-verde { color: #3DD6A0 !important; }
+  html.dark .text-amarillo { color: #F2B24A !important; }
+  html.dark .text-rojo { color: #FF8A8A !important; }
+  html.dark .border-amarillo\/30 { border-color: rgba(242,178,74,.35) !important; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
 </style>
 </head>
 <body class="min-h-screen bg-neutral-50 text-neutral-900">
@@ -84,9 +199,21 @@ let supabase = crearClienteConAlmacenamiento(recordarmeGuardado());
 
 // ---------------- Tema, tamaño de letra (preferencias del navegador) ----------------
 
+const TEMAS = [
+  { id: 'claro', nombre: 'Claro', grad: 'linear-gradient(135deg,#FAF6F8,#F4E8ED 55%,#8B3A5C)', meta: '#8B3A5C' },
+  { id: 'oscuro', nombre: 'Oscuro', grad: 'linear-gradient(135deg,#141214,#3B2230 55%,#E8A9C4)', meta: '#141214' },
+  { id: 'oceano', nombre: 'Océano', grad: 'linear-gradient(135deg,#22D3EE,#3D5FD8)', meta: '#0B1220' },
+  { id: 'amatista', nombre: 'Amatista', grad: 'linear-gradient(135deg,#7C5CF0,#D946EF)', meta: '#120C1F' },
+  { id: 'aurora', nombre: 'Aurora', grad: 'linear-gradient(135deg,#34D399,#0E8C9A)', meta: '#08171A' }
+];
 function aplicarTema(tema) {
-  document.documentElement.classList.toggle('dark', tema === 'oscuro');
-  localStorage.setItem('cep_tema', tema);
+  const t = TEMAS.find((x) => x.id === tema) || TEMAS[0];
+  const cl = document.documentElement.classList;
+  ['dark', ...TEMAS.map((x) => 'tema-' + x.id)].forEach((c) => cl.remove(c));
+  if (t.id !== 'claro') cl.add('dark');
+  if (!['claro', 'oscuro'].includes(t.id)) cl.add('tema-' + t.id);
+  try { localStorage.setItem('cep_tema', t.id); } catch (e) { /* sin almacenamiento */ }
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t.meta);
 }
 function temaGuardado() {
   return localStorage.getItem('cep_tema') || 'claro';
@@ -730,9 +857,9 @@ function analizarRanking(D, M) {
   filas.forEach((f) => {
     if (f.jarra == null) { f.veredicto = { t: 'Sin receta de costo', c: '#888' }; return; }
     const barato = f.jarra <= mediana;
-    if (f.nota >= 4 && barato) f.veredicto = { t: '⭐ Repetir: barata y bien calificada', c: '#1D9E75' };
-    else if (f.nota >= 4) f.veredicto = { t: 'Gusta, pero es cara: optimizar receta', c: '#EF9F27' };
-    else if (f.nota < 3.5 && !barato) f.veredicto = { t: 'Considerar sacarla: cara y poco valorada', c: '#E24B4A' };
+    if (f.nota >= 4 && barato) f.veredicto = { t: '⭐ Repetir: barata y bien calificada', c: '#168A62' };
+    else if (f.nota >= 4) f.veredicto = { t: 'Gusta, pero es cara: optimizar receta', c: '#C97B06' };
+    else if (f.nota < 3.5 && !barato) f.veredicto = { t: 'Considerar sacarla: cara y poco valorada', c: '#D23B3B' };
     else f.veredicto = { t: 'Revisar', c: '#888' };
   });
   return { filas: filas.sort((a, b) => b.nota - a.nota), mediana };
@@ -1423,7 +1550,7 @@ async function descargarInformeCostosPdf() {
     <p class="sub">Mercato Valdivia · ${fecha}</p>
     <p class="sub">Parámetros: venta ${fmtCLP(D.cfg.precio_venta_jarra)} por jarra · tope de costo ${fmtPct(D.cfg.tope_costo_pct)} · ${D.cfg.porciones_lote} porciones y ${D.cfg.jarras_lote} jarras por lote.</p>
     <h2>1. Costo y margen por mezcla</h2>
-    ${filas.length ? tabla(['Mezcla', 'Por porción', 'Por bloque', 'Por jarra', 'Venta', 'Margen', 'Costo %', ''], filas.map((x) => [`<b>${M.nombreReceta(x.r)}</b>`, fmtCLP1(x.c.porcion), fmtCLP1(x.c.bloque), fmtCLP(x.c.jarra), fmtCLP(x.c.venta), `${fmtCLP(x.c.margen)} (${fmtPct(x.c.margenPct)})`, fmtPct(x.c.pctCosto), barra(x.c.pctCosto / maxPct * 100, x.c.pctCosto > D.cfg.tope_costo_pct ? '#E24B4A' : '#1D9E75')])) : '<p>Sin mezclas cargadas.</p>'}
+    ${filas.length ? tabla(['Mezcla', 'Por porción', 'Por bloque', 'Por jarra', 'Venta', 'Margen', 'Costo %', ''], filas.map((x) => [`<b>${M.nombreReceta(x.r)}</b>`, fmtCLP1(x.c.porcion), fmtCLP1(x.c.bloque), fmtCLP(x.c.jarra), fmtCLP(x.c.venta), `${fmtCLP(x.c.margen)} (${fmtPct(x.c.margenPct)})`, fmtPct(x.c.pctCosto), barra(x.c.pctCosto / maxPct * 100, x.c.pctCosto > D.cfg.tope_costo_pct ? '#D23B3B' : '#168A62')])) : '<p>Sin mezclas cargadas.</p>'}
     <h2>2. Qué conviene producir primero</h2>
     ${L.length ? tabla(['Mezcla', 'Bloques existentes', 'Pulpa en stock', 'Calificación', 'Costo/jarra'], L.map((x) => [x.nombre, x.existentes, x.sinPulpa ? 'sin stock' : x.stockPulpa, x.nota != null ? x.nota.toFixed(1).replace('.', ',') + ' ★' : '—', fmtCLP(x.jarra)])) : '<p>Sin datos.</p>'}
     <h2>3. Costo y calificación del público</h2>
@@ -1483,7 +1610,7 @@ async function vistaInicio() {
   ];
 
   app.innerHTML = shell('Inicio', `
-    <div class="flex flex-col items-center px-6 pt-10 pb-6 text-center">
+    <div class="hero-inicio flex flex-col items-center px-6 py-8 text-center">
       ${LOGO_COMPLETO}
       <p class="mt-4 text-lg font-medium text-marca">${saludoSegunHora()}, ${usuarioActual.nombre}</p>
       <p class="mt-1 text-sm text-neutral-500">${mensaje}</p>
@@ -1503,12 +1630,12 @@ async function vistaInicio() {
     <div class="grid grid-cols-2 gap-3 px-6">
       ${accesos.map((a) => `
         <button data-ir="${a.clave}" class="btn-acceso-inicio flex flex-col items-center gap-2 rounded-2xl border-4 border-black py-6 text-sm font-medium text-neutral-700 active:bg-marca-light">
-          <span class="text-2xl">${a.emoji}</span>
+          <span class="icono-acceso">${a.emoji}</span>
           ${a.etiqueta}
         </button>`).join('')}
       ${esAdmin ? `
         <button data-ir="configuracion" class="btn-acceso-inicio flex flex-col items-center gap-2 rounded-2xl border-4 border-black py-6 text-sm font-medium text-neutral-700 active:bg-marca-light">
-          <span class="text-2xl">⚙️</span>
+          <span class="icono-acceso">⚙️</span>
           Configuración
         </button>` : ''}
     </div>
@@ -1533,13 +1660,13 @@ function filaMovimientoDiario(m, puedeEditarSemana) {
   return `
     <div class="flex items-center gap-3 border-b border-neutral-100 px-2 py-2">
       <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${positivo ? 'bg-verde/10' : 'bg-rojo/10'}">
-        <span style="color:${positivo ? '#1D9E75' : '#E24B4A'}">${positivo ? '↗' : '↘'}</span>
+        <span style="color:${positivo ? '#168A62' : '#D23B3B'}">${positivo ? '↗' : '↘'}</span>
       </span>
       <div class="flex-1">
         <p class="text-sm font-medium">${m.sabor} · ${m.tipo}</p>
         <p class="text-[10.5px] text-neutral-400">${m.responsable} · ${new Date(m.fecha).toLocaleString('es-CL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>
       </div>
-      <span class="text-sm font-medium" style="color:${positivo ? '#1D9E75' : '#E24B4A'}">${positivo ? '+' : ''}${m.cantidad} ${m.formato}</span>
+      <span class="text-sm font-medium" style="color:${positivo ? '#168A62' : '#D23B3B'}">${positivo ? '+' : ''}${m.cantidad} ${m.formato}</span>
       ${puedeEditarEste ? `<button data-editar-mov="${m.id}" data-mov-sabor="${m.sabor}" data-mov-tipo="${m.tipo}" data-mov-formato="${m.formato}" data-mov-cantidad="${m.cantidad}" class="btn-editar-mov p-1 text-neutral-400" aria-label="Editar movimiento">✏️</button>` : ''}
     </div>`;
 }
@@ -2306,6 +2433,7 @@ async function vistaProduccion() {
       </div>
       <div class="flex items-center gap-1">
         ${permitido && l.ubicacion === 'SALON' ? `<button data-finalizar-lote="${l.id}" data-lote-sabor="${l.sabor}" data-lote-complemento="${l.complemento}" class="btn-finalizar-lote rounded-full border border-marca px-2 py-1 text-[10px] font-medium text-marca" aria-label="Finalizar y calificar">Finalizar</button>` : ''}
+        ${permitido ? `<button data-editar-lote="${l.id}" class="btn-editar-lote p-1 text-neutral-400" aria-label="Editar producción">✏️</button>` : ''}
         ${permitido ? `<button data-editar-fecha-lote="${l.id}" data-fecha-actual="${l.fecha_ingreso}" class="btn-editar-fecha p-1 text-neutral-400" aria-label="Editar fecha">📅</button>` : ''}
         ${permitido && hayParaUnir(l) ? `<button data-unir-lote="${l.id}" class="btn-unir-lote rounded-full border border-neutral-300 px-2 py-1 text-[10px] font-medium text-neutral-600" aria-label="Unir con otra producción">Unir</button>` : ''}
         ${usuarioActual.rol === 'admin' ? `<button data-eliminar-lote="${l.id}" data-lote-nombre="${l.sabor} + ${l.complemento}" class="btn-eliminar-lote p-1 text-red-400" aria-label="Eliminar producción">🗑️</button>` : ''}
@@ -2365,6 +2493,13 @@ async function vistaProduccion() {
       });
     });
 
+    document.querySelectorAll('.btn-editar-lote').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const lote = (lotes || []).find((x) => String(x.id) === btn.dataset.editarLote);
+        if (lote) abrirModalEditarLote(lote, vistaProduccion);
+      });
+    });
+
     document.querySelectorAll('.btn-unir-lote').forEach((btn) => {
       btn.addEventListener('click', () => {
         const destino = lotesActivos.find((x) => String(x.id) === btn.dataset.unirLote);
@@ -2413,6 +2548,55 @@ async function vistaProduccion() {
 }
 
 /** Muestra un pequeño selector de fecha flotante junto al botón que se tocó, y llama a onConfirmar con el valor elegido. */
+function abrirModalEditarLote(lote, alTerminar) {
+  document.getElementById('modal-editar-lote')?.remove();
+  const bloques = [lote.bloques_uni1, lote.bloques_uni2, lote.bloques_uni3, lote.bloques_uni4].filter((b) => b != null && b !== 0).join(', ');
+  const esc = (v) => String(v ?? '').replace(/"/g, '&quot;');
+  const c = document.createElement('div');
+  c.id = 'modal-editar-lote';
+  c.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4';
+  c.innerHTML = `
+    <div class="max-h-[90vh] w-full max-w-sm overflow-y-auto rounded-xl bg-white p-4">
+      <p class="mb-3 text-sm font-medium">Editar producción</p>
+      <div class="flex flex-col gap-3">
+        <div><label class="mb-1 block text-xs text-neutral-500">Pulpa</label><input id="edit-lote-sabor" value="${esc(lote.sabor)}" /></div>
+        <div><label class="mb-1 block text-xs text-neutral-500">Fruta</label><input id="edit-lote-complemento" value="${esc(lote.complemento)}" /></div>
+        <div><label class="mb-1 block text-xs text-neutral-500">Bloques (separados por coma, hasta 4)</label><input id="edit-lote-bloques" type="text" inputmode="decimal" value="${esc(bloques)}" placeholder="ej. 21, 21" /></div>
+        <div><label class="mb-1 block text-xs text-neutral-500">Fecha de elaboración</label><input id="edit-lote-fecha" type="date" value="${String(lote.fecha_ingreso).slice(0, 10)}" /></div>
+        <div><label class="mb-1 block text-xs text-neutral-500">Responsables de la preparación</label><input id="edit-lote-preparado" value="${esc((lote.preparado_por || []).join(', '))}" /></div>
+        <div><label class="mb-1 block text-xs text-neutral-500">Encargado del turno</label><input id="edit-lote-encargado" value="${esc(lote.encargado_turno)}" /></div>
+        <p id="edit-lote-error" class="hidden text-xs text-rojo"></p>
+        <div class="flex gap-2">
+          <button id="btn-cancelar-edit-lote" class="h-10 flex-1 rounded-lg border border-neutral-200 text-xs text-neutral-500">Cancelar</button>
+          <button id="btn-guardar-edit-lote" class="h-10 flex-1 rounded-lg bg-marca text-xs font-medium text-white">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(c);
+  document.getElementById('btn-cancelar-edit-lote').addEventListener('click', () => c.remove());
+  document.getElementById('btn-guardar-edit-lote').addEventListener('click', async () => {
+    const err = document.getElementById('edit-lote-error');
+    err.classList.add('hidden');
+    const sabor = document.getElementById('edit-lote-sabor').value.trim();
+    const complemento = document.getElementById('edit-lote-complemento').value.trim();
+    const bloquesTxt = document.getElementById('edit-lote-bloques').value.trim();
+    const bs = bloquesTxt.split(',').map((x) => x.trim().replace(',', '.')).filter(Boolean).map(Number);
+    if (!sabor || !complemento) { err.textContent = 'Pulpa y Fruta son obligatorias.'; err.classList.remove('hidden'); return; }
+    if (!bs.length || bs.some((n) => !Number.isFinite(n) || n < 0) || bs.length > 4) { err.textContent = 'Indica entre 1 y 4 cantidades de bloques válidas.'; err.classList.remove('hidden'); return; }
+    const [b1 = 0, b2 = 0, b3 = 0, b4 = 0] = bs;
+    const prep = document.getElementById('edit-lote-preparado').value.split(',').map((x) => x.trim()).filter(Boolean);
+    const cambios = {
+      sabor, complemento, bloques_uni1: b1, bloques_uni2: b2, bloques_uni3: b3, bloques_uni4: b4,
+      fecha_ingreso: document.getElementById('edit-lote-fecha').value || lote.fecha_ingreso,
+      preparado_por: prep, encargado_turno: document.getElementById('edit-lote-encargado').value.trim() || null
+    };
+    const { error } = await supabase.from('produccion_mezclas').update(cambios).eq('id', lote.id);
+    if (error) { err.textContent = 'No se pudo guardar: ' + error.message; err.classList.remove('hidden'); return; }
+    c.remove();
+    await alTerminar();
+  });
+}
+
 function abrirModalUnirLotes(destino, candidatos, alTerminar) {
   const existente = document.getElementById('modal-unir-lotes');
   if (existente) existente.remove();
@@ -3139,7 +3323,7 @@ async function vistaGlobal() {
     cont.innerHTML = lotesProduccion.length ? lotesProduccion.map((l) => {
       const totalBloques = [l.bloques_uni1, l.bloques_uni2, l.bloques_uni3, l.bloques_uni4].reduce((a, b) => a + (b || 0), 0);
       const est = estadoStock(totalBloques);
-      const colorBarra = totalBloques < 0 ? '#FF1744' : totalBloques <= umbralRojo ? '#E24B4A' : totalBloques <= umbralAmarillo ? '#EF9F27' : '#1D9E75';
+      const colorBarra = totalBloques < 0 ? '#FF1744' : totalBloques <= umbralRojo ? '#D23B3B' : totalBloques <= umbralAmarillo ? '#C97B06' : '#168A62';
       const fecha = new Date(l.fecha_ingreso).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
       return `
         <div class="flex items-center gap-3 border-b border-neutral-100 px-2 py-2">
@@ -3174,7 +3358,7 @@ async function vistaGlobal() {
   }
   cont.innerHTML = filtrados.length ? filtrados.map((item) => {
     const est = estadoStock(item.total);
-    const colorBarra = item.total < 0 ? '#FF1744' : item.total <= umbralRojo ? '#E24B4A' : item.total <= umbralAmarillo ? '#EF9F27' : '#1D9E75';
+    const colorBarra = item.total < 0 ? '#FF1744' : item.total <= umbralRojo ? '#D23B3B' : item.total <= umbralAmarillo ? '#C97B06' : '#168A62';
     return `
       <div class="flex items-center gap-3 border-b border-neutral-100 px-2 py-2">
         <span class="h-full w-1 self-stretch rounded" style="background-color:${colorBarra}"></span>
@@ -3258,11 +3442,11 @@ function construirHtmlReporte(items, fecha, certificadoPor) {
       <div style="position:relative;z-index:1;">
         <h1 style="color:#8B3A5C;font-size:18px;margin-bottom:2px">Control de Existencias y Producciones</h1>
         <p style="color:#888;font-size:12px;margin-top:0">Existencias globales — generado el ${fecha} por ${usuarioActual.nombre}</p>
-        ${certificadoPor ? `<p style="color:#1D9E75;font-weight:600;font-size:12px">✅ Certificado por ${certificadoPor}</p>` : ''}
+        ${certificadoPor ? `<p style="color:#168A62;font-weight:600;font-size:12px">✅ Certificado por ${certificadoPor}</p>` : ''}
         <div style="display:flex;gap:14px;margin-top:14px;font-size:11px;color:#555">
-          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#1D9E75"></span>${umbralAmarillo + 1} o más</span>
-          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#EF9F27"></span>${umbralRojo + 1} a ${umbralAmarillo}</span>
-          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#E24B4A"></span>0 a ${umbralRojo}</span>
+          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#168A62"></span>${umbralAmarillo + 1} o más</span>
+          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#C97B06"></span>${umbralRojo + 1} a ${umbralAmarillo}</span>
+          <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#D23B3B"></span>0 a ${umbralRojo}</span>
           <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:#FF1744"></span>Negativo</span>
         </div>
         <table style="width:100%;border-collapse:separate;border-spacing:0 4px;margin-top:16px">
@@ -3301,9 +3485,9 @@ async function capturarPantallaExistencias(items, certificadoPor = null) {
 
 function colorPdfPorCantidad(total) {
   if (total < 0) return { bg: '#FF1744', color: '#ffffff' };
-  if (total <= umbralRojo) return { bg: '#E24B4A', color: '#ffffff' };
-  if (total <= umbralAmarillo) return { bg: '#EF9F27', color: '#ffffff' };
-  return { bg: '#1D9E75', color: '#ffffff' };
+  if (total <= umbralRojo) return { bg: '#D23B3B', color: '#ffffff' };
+  if (total <= umbralAmarillo) return { bg: '#C97B06', color: '#ffffff' };
+  return { bg: '#168A62', color: '#ffffff' };
 }
 
 function descargarPdfExistencias(items, certificadoPor = null) {
@@ -3537,8 +3721,8 @@ function construirHtmlInformeMensual(d) {
   const formatoCLP = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(n);
   const filasDiarioHtml = d.filasDiarioAgg.map((f) => `
     <tr><td style="padding:6px;font-weight:600">${f.sabor}</td><td style="padding:6px">${f.tipo}</td>
-      <td style="padding:6px;text-align:right;color:#1D9E75">+${f.entradas}</td>
-      <td style="padding:6px;text-align:right;color:#E24B4A">-${f.salidas}</td>
+      <td style="padding:6px;text-align:right;color:#168A62">+${f.entradas}</td>
+      <td style="padding:6px;text-align:right;color:#D23B3B">-${f.salidas}</td>
       ${d.puedeVerValor ? `<td style="padding:6px;text-align:right">${f.vEntradas ? formatoCLP(f.vEntradas) : '—'}</td><td style="padding:6px;text-align:right">${f.vSalidas ? formatoCLP(f.vSalidas) : '—'}</td>` : ''}</tr>`).join('')
     || `<tr><td colspan="${d.puedeVerValor ? 6 : 4}" style="padding:10px;text-align:center;color:#999">Sin movimientos</td></tr>`;
   const th = (t, right) => `<th style="text-align:${right ? 'right' : 'left'};padding:6px">${t}</th>`;
@@ -3641,9 +3825,9 @@ async function vistaConfiguracion() {
     <div class="flex flex-col gap-6 p-4">
       <div>
         <p class="mb-3 text-sm font-medium">Apariencia</p>
-        <div class="flex items-center justify-between border-b border-neutral-100 py-2">
-          <span class="text-sm text-neutral-600">Modo oscuro</span>
-          <button id="btn-toggle-oscuro" class="text-2xl ${temaActual === 'oscuro' ? 'text-marca' : 'text-neutral-400'}">${temaActual === 'oscuro' ? '●' : '○'}</button>
+        <p class="mb-2 text-xs text-neutral-500">Tema</p>
+        <div class="grid grid-cols-5 gap-2">
+          ${TEMAS.map((t) => `<button data-tema="${t.id}" class="btn-tema flex flex-col items-center gap-1 rounded-xl border-2 p-1 text-[10px] ${temaActual === t.id ? 'border-marca font-medium' : 'border-transparent text-neutral-500'}" aria-label="Tema ${t.nombre}"><span class="block h-9 w-full rounded-lg" style="background:${t.grad}"></span>${t.nombre}</button>`).join('')}
         </div>
         <p class="mt-3 mb-2 text-xs text-neutral-500">Tamaño de letra</p>
         <div class="flex gap-2">
@@ -3747,9 +3931,11 @@ async function vistaConfiguracion() {
 
   document.getElementById('btn-ir-usuarios')?.addEventListener('click', () => cambiarPantalla('usuarios'));
 
-  document.getElementById('btn-toggle-oscuro').addEventListener('click', () => {
-    aplicarTema(temaGuardado() === 'oscuro' ? 'claro' : 'oscuro');
-    vistaConfiguracion();
+  document.querySelectorAll('.btn-tema').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      aplicarTema(btn.dataset.tema);
+      vistaConfiguracion();
+    });
   });
   document.querySelectorAll('.btn-tamano').forEach((btn) => {
     btn.addEventListener('click', () => {
