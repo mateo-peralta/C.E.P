@@ -164,6 +164,30 @@
   html.dark .text-rojo { color: #FF8A8A !important; }
   html.dark .border-amarillo\/30 { border-color: rgba(242,178,74,.35) !important; }
 
+  /* ======== Modos de dispositivo ======== */
+  html.modo-movil #app { max-width: 30rem; margin: 0 auto; min-height: 100vh; }
+  html.modo-movil nav.fixed { left: 50%; right: auto; width: 100%; max-width: 30rem; transform: translateX(-50%); }
+  @media (min-width: 32rem) {
+    html.modo-movil #app { border-left: 1px solid var(--borde); border-right: 1px solid var(--borde); box-shadow: 0 0 40px -20px rgba(70,25,50,.35); }
+  }
+  html.modo-escritorio .layout-escritorio { display: flex; min-height: 100vh; }
+  .sidebar-escritorio { position: sticky; top: 0; align-self: flex-start; display: flex; flex-direction: column; flex: none; width: 16.5rem; height: 100vh; overflow-y: auto; padding: 1.25rem 1rem; border-right: 1px solid var(--borde); background: rgba(255,255,255,.75); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  .main-escritorio { flex: 1; min-width: 0; }
+  html.modo-escritorio .main-escritorio header { position: sticky; top: 0; }
+  html.modo-escritorio #contenido { max-width: 1120px; margin: 0 auto; padding: .5rem 1.5rem 3rem; }
+  html.modo-escritorio .grid-acceso { grid-template-columns: repeat(4, minmax(0, 1fr)); padding-left: 0; padding-right: 0; }
+  html.modo-escritorio .hero-inicio { margin-left: 0; margin-right: 0; }
+  html.modo-escritorio #contenido #lista-global, html.modo-escritorio #contenido .max-h-\[50vh\] { max-height: 65vh; }
+  .item-sidebar { display: flex; width: 100%; align-items: center; gap: .6rem; border-radius: .75rem; padding: .55rem .75rem; text-align: left; font-size: .85rem; color: #52525b; transition: background-color .12s, color .12s; }
+  .item-sidebar:hover { background-color: rgb(var(--ml)); }
+  .item-sidebar.activo { background: linear-gradient(180deg, rgb(var(--g1)), rgb(var(--m))); color: #fff; font-weight: 600; box-shadow: 0 4px 10px -4px rgb(var(--m) / .6); }
+  html.dark .sidebar-escritorio { background: rgb(var(--card) / .85); border-right-color: rgb(var(--line)); }
+  html.dark .item-sidebar { color: #d4d4d8; }
+  html.dark .item-sidebar:hover { background-color: rgb(var(--t1)); }
+  html.dark .item-sidebar.activo { color: #fff; }
+  html.dark .main-escritorio header .hover\:bg-neutral-100:hover { background-color: rgb(var(--t1)); }
+  .hero-dispositivo { background: radial-gradient(700px 420px at 50% -10%, rgb(var(--m) / .10), transparent 65%); }
+
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
 </style>
 </head>
@@ -390,7 +414,65 @@ function detenerMonitoreoTurno() {
 
 // ---------------- Render raíz ----------------
 
+// ---------------- Dispositivo (teléfono / escritorio) ----------------
+
+const dispositivoGuardado = () => { try { return localStorage.getItem('cep_dispositivo'); } catch (e) { return null; } };
+const dispositivoSugerido = () => dispositivoGuardado() || (window.matchMedia('(min-width: 1024px)').matches ? 'escritorio' : 'movil');
+const dispositivoConfirmado = () => { try { return sessionStorage.getItem('cep_disp_ok') === '1'; } catch (e) { return false; } };
+const modoEscritorio = () => document.documentElement.classList.contains('modo-escritorio');
+
+function aplicarDispositivo(d, guardar = false) {
+  const cl = document.documentElement.classList;
+  cl.remove('modo-movil', 'modo-escritorio');
+  cl.add(d === 'escritorio' ? 'modo-escritorio' : 'modo-movil');
+  if (guardar) { try { localStorage.setItem('cep_dispositivo', d); } catch (e) { /* sin almacenamiento */ } }
+}
+
+function vistaElegirDispositivo() {
+  const sugerido = dispositivoSugerido();
+  const logoGrande = LOGO_COMPLETO.replace('width="52" height="57"', 'width="92" height="101"');
+  const opcion = (clave, emoji, titulo, desc) => `
+    <button data-dispositivo="${clave}" class="btn-acceso-inicio relative flex flex-col items-center gap-2 rounded-2xl border-4 border-black px-3 py-7 text-sm font-medium text-neutral-700">
+      ${dispositivoGuardado() === clave ? '<span class="absolute -top-2.5 rounded-full bg-marca px-2 py-0.5 text-[9.5px] font-medium text-white">Último usado</span>' : ''}
+      <span class="icono-acceso" style="height:3.75rem;width:3.75rem;font-size:2rem">${emoji}</span>
+      ${titulo}
+      <span class="text-[11px] font-normal text-neutral-500">${desc}</span>
+    </button>`;
+  return `
+  <main class="hero-dispositivo flex min-h-screen flex-col items-center justify-center gap-7 p-6 text-center">
+    ${logoGrande}
+    <div>
+      <p class="text-xl font-medium text-marca">Control de Existencias</p>
+      <p class="mt-1 text-sm text-neutral-500">Mercato Valdivia · ¿desde qué dispositivo vas a revisar la app?</p>
+    </div>
+    <div class="grid w-full max-w-md grid-cols-2 gap-4">
+      ${opcion('movil', '📱', 'Teléfono', 'Vista compacta con menú inferior')}
+      ${opcion('escritorio', '🖥️', 'Escritorio', 'Vista amplia con barra lateral')}
+    </div>
+    <p class="text-xs text-neutral-400">${sugerido === 'escritorio' ? 'Detectamos una pantalla grande.' : 'Detectamos una pantalla de teléfono.'} Puedes cambiarlo después desde el menú o en Configuración.</p>
+  </main>`;
+}
+
+function montarElegirDispositivo() {
+  document.querySelectorAll('[data-dispositivo]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      aplicarDispositivo(btn.dataset.dispositivo, true);
+      try { sessionStorage.setItem('cep_disp_ok', '1'); } catch (e) { /* sin almacenamiento */ }
+      pantallaCarga.classList.remove('hidden');
+      app.classList.add('hidden');
+      await render();
+    });
+  });
+}
+
 async function render() {
+  if (!dispositivoConfirmado()) {
+    app.innerHTML = vistaElegirDispositivo();
+    montarElegirDispositivo();
+    pantallaCarga.classList.add('hidden');
+    app.classList.remove('hidden');
+    return;
+  }
   const { data: { session } } = await supabase.auth.getSession();
 
   if (!session) {
@@ -658,8 +740,22 @@ function montarLogin() {
 
 // ---------------- Shell (header + nav) ----------------
 
+function itemsNavegacion() {
+  const rol = usuarioActual.rol;
+  return [
+    { clave: 'inicio', t: 'Inicio', e: '🏠' },
+    { clave: 'diario', t: 'Diario', e: '📒' },
+    { clave: 'produccion', t: 'Producción', e: '🏭' },
+    { clave: 'resumen', t: 'Resumen', e: '📊' },
+    { clave: 'global', t: 'Reporte', e: '📈' },
+    { clave: 'historial', t: 'Historial de sabores', e: '⭐' },
+    ...((rol === 'admin' || rol === 'jefe') ? [{ clave: 'costos', t: 'Centro de costos', e: '💰' }, { clave: 'analisis', t: 'Análisis de producción', e: '🧭' }] : []),
+    { clave: 'configuracion', t: 'Configuración', e: '⚙️' }
+  ];
+}
+
 function shell(titulo, contenidoHtml) {
-  const esAdmin = usuarioActual.rol === 'admin';
+  if (modoEscritorio()) return shellEscritorio(titulo, contenidoHtml);
   return `
     <header class="flex items-center gap-2 border-b border-neutral-200 px-4 py-3">
       ${historialPantallas.length > 0 ? `<button id="btn-atras" aria-label="Volver atrás" class="p-1 text-neutral-500">←</button>` : ''}
@@ -673,6 +769,7 @@ function shell(titulo, contenidoHtml) {
           <button data-menu="historial" class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-neutral-700">⭐ Historial de sabores</button>
           ${(usuarioActual.rol === 'admin' || usuarioActual.rol === 'jefe') ? `<button data-menu="costos" class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-neutral-700">💰 Centro de costos</button>
           <button data-menu="analisis" class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-neutral-700">📊 Análisis de producción</button>` : ''}
+          <button id="btn-cambiar-dispositivo" class="flex w-full items-center gap-2 border-t border-neutral-100 px-3 py-2.5 text-left text-sm text-neutral-700">🔄 Cambiar dispositivo</button>
         </div>
       </div>
     </header>
@@ -684,6 +781,34 @@ function shell(titulo, contenidoHtml) {
       ${navBoton('global', 'Reporte')}
     </nav>
   `;
+}
+
+function shellEscritorio(titulo, contenidoHtml) {
+  const logo = LOGO_CORTO;
+  return `
+    <div class="layout-escritorio">
+      <aside class="sidebar-escritorio">
+        <button id="btn-ir-inicio" aria-label="Ir a Inicio" class="mb-5 flex items-center gap-2 px-2 text-left">
+          ${logo}<span class="text-sm font-semibold leading-tight text-marca">Control de<br>Existencias</span>
+        </button>
+        <nav class="flex flex-1 flex-col gap-1">
+          ${itemsNavegacion().map((i) => `<button data-menu="${i.clave}" class="item-sidebar ${pantalla === i.clave ? 'activo' : ''}"><span class="w-5 text-center">${i.e}</span>${i.t}</button>`).join('')}
+        </nav>
+        <div class="mt-4 border-t border-neutral-200 pt-3">
+          <p class="px-2 text-xs font-medium text-neutral-700">${usuarioActual.nombre}</p>
+          <p class="mb-2 px-2 text-[11px] capitalize text-neutral-400">${usuarioActual.rol}</p>
+          <button id="btn-cambiar-dispositivo" class="item-sidebar !py-1.5 !text-xs">🔄 Cambiar dispositivo</button>
+          <button id="btn-logout" class="item-sidebar !py-1.5 !text-xs">↩️ Cerrar sesión</button>
+        </div>
+      </aside>
+      <div class="main-escritorio">
+        <header class="flex items-center gap-2 border-b border-neutral-200 px-6 py-3">
+          ${historialPantallas.length > 0 ? `<button id="btn-atras" aria-label="Volver atrás" class="rounded-lg px-2 py-1 text-neutral-500 hover:bg-neutral-100">← Volver</button>` : ''}
+          <p class="flex-1 text-base font-medium text-marca">${titulo}</p>
+        </header>
+        <div id="contenido" class="pb-10">${contenidoHtml}</div>
+      </div>
+    </div>`;
 }
 
 function navBoton(clave, etiqueta) {
@@ -701,6 +826,11 @@ function montarShell() {
     await render();
   });
   document.getElementById('btn-config')?.addEventListener('click', () => cambiarPantalla('configuracion'));
+  document.getElementById('btn-cambiar-dispositivo')?.addEventListener('click', async () => {
+    detenerMonitoreoTurno();
+    try { sessionStorage.removeItem('cep_disp_ok'); } catch (e) { /* sin almacenamiento */ }
+    await render();
+  });
   const menu = document.getElementById('menu-desplegable');
   document.getElementById('btn-menu')?.addEventListener('click', (e) => { e.stopPropagation(); menu.classList.toggle('hidden'); });
   document.addEventListener('click', () => menu?.classList.add('hidden'), { once: true });
@@ -1691,7 +1821,7 @@ async function vistaInicio() {
     </div>` : ''}
 
     <p class="px-6 pb-2 text-xs font-medium text-neutral-400">¿Por dónde quieres empezar?</p>
-    <div class="grid grid-cols-2 gap-3 px-6">
+    <div class="grid-acceso grid grid-cols-2 gap-3 px-6">
       ${accesos.map((a) => `
         <button data-ir="${a.clave}" class="btn-acceso-inicio flex flex-col items-center gap-2 rounded-2xl border-4 border-black py-6 text-sm font-medium text-neutral-700 active:bg-marca-light">
           <span class="icono-acceso">${a.emoji}</span>
@@ -3892,6 +4022,10 @@ async function vistaConfiguracion() {
     <div class="flex flex-col gap-6 p-4">
       <div>
         <p class="mb-3 text-sm font-medium">Apariencia</p>
+        <p class="mb-2 text-xs text-neutral-500">Dispositivo</p>
+        <div class="mb-3 grid grid-cols-2 gap-2">
+          ${[['movil', '📱', 'Teléfono'], ['escritorio', '🖥️', 'Escritorio']].map(([k, e, t]) => `<button data-disp-cfg="${k}" class="btn-disp-cfg flex items-center justify-center gap-2 rounded-xl border-2 py-2 text-xs ${(modoEscritorio() ? 'escritorio' : 'movil') === k ? 'border-marca font-medium text-marca' : 'border-neutral-200 text-neutral-500'}">${e} ${t}</button>`).join('')}
+        </div>
         <p class="mb-2 text-xs text-neutral-500">Tema</p>
         <div class="grid grid-cols-5 gap-2">
           ${TEMAS.map((t) => `<button data-tema="${t.id}" class="btn-tema flex flex-col items-center gap-1 rounded-xl border-2 p-1 text-[10px] ${temaActual === t.id ? 'border-marca font-medium' : 'border-transparent text-neutral-500'}" aria-label="Tema ${t.nombre}"><span class="block h-9 w-full rounded-lg" style="background:${t.grad}"></span>${t.nombre}</button>`).join('')}
@@ -3998,6 +4132,12 @@ async function vistaConfiguracion() {
 
   document.getElementById('btn-ir-usuarios')?.addEventListener('click', () => cambiarPantalla('usuarios'));
 
+  document.querySelectorAll('.btn-disp-cfg').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      aplicarDispositivo(btn.dataset.dispCfg, true);
+      await vistaConfiguracion();
+    });
+  });
   document.querySelectorAll('.btn-tema').forEach((btn) => {
     btn.addEventListener('click', () => {
       aplicarTema(btn.dataset.tema);
@@ -4405,6 +4545,7 @@ async function ejecutarReinicioExistencias() {
 // ---------------- Arranque ----------------
 
 aplicarTema(temaGuardado());
+aplicarDispositivo(dispositivoSugerido());
 aplicarTamanoLetra(tamanoLetraGuardado());
 supabase.auth.onAuthStateChange(() => render());
 render();
